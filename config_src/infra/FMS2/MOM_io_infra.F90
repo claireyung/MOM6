@@ -1881,7 +1881,7 @@ end subroutine write_metadata_axis
 !> Store information about an output variable in a previously defined fieldtype and write this
 !! information to the file indicated by unit.
 subroutine write_metadata_field(IO_handle, field, axes, name, units, longname, &
-                                pack, standard_name, checksum)
+                                pack, standard_name, checksum, do_compress)
   type(file_type),            intent(in)    :: IO_handle  !< Handle for a file that is open for writing
   type(fieldtype),            intent(inout) :: field !< The fieldtype where this information is stored
   type(axistype), dimension(:), intent(in)  :: axes  !< Handles for the axis used for this variable
@@ -1894,6 +1894,7 @@ subroutine write_metadata_field(IO_handle, field, axes, name, units, longname, &
   character(len=*), optional, intent(in)    :: standard_name !< The standard (e.g., CMOR) name for this variable
   integer(kind=int64), dimension(:), &
                     optional, intent(in)    :: checksum !< Checksum values that can be used to verify reads.
+  logical, optional, intent(in) :: do_compress
 
   ! Local variables
   character(len=256), dimension(size(axes)) :: dim_names ! The names of the dimensions
@@ -1906,7 +1907,7 @@ subroutine write_metadata_field(IO_handle, field, axes, name, units, longname, &
   if (IO_handle%FMS2_file) then
     do i=1,ndims ; dim_names(i) = trim(axes(i)%name) ; enddo
     prec_string = "double" ; if (present(pack)) then ; if (pack > 1) prec_string = "float" ; endif
-    call register_field(IO_handle%fileobj, trim(name), trim(prec_string), dimensions=dim_names)
+    call register_field(IO_handle%fileobj, trim(name), trim(prec_string), dimensions=dim_names, do_compress=do_compress)
     if (len_trim(longname) > 0) &
       call register_variable_attribute(IO_handle%fileobj, trim(name), 'long_name', &
                                        trim(longname), len_trim(longname))

@@ -155,7 +155,7 @@ contains
 !! structures that describe this file and variables that will
 !! later be written to this file.
 subroutine create_file(IO_handle, filename, vars, novars, fields, threading, timeunit, &
-                       G, dG, GV, checksums, extra_axes, global_atts)
+                       G, dG, GV, checksums, extra_axes, global_atts, do_compress)
   type(file_type),       intent(inout) :: IO_handle  !< Handle for a files or fileset that is to be
                                                      !! opened or reopened for writing
   character(len=*),      intent(in)    :: filename   !< full path to the file to create
@@ -178,7 +178,8 @@ subroutine create_file(IO_handle, filename, vars, novars, fields, threading, tim
   type(axis_info),         optional, intent(in) :: extra_axes(:)  !< Types with information about
                                                      !! some axes that might be used in this file
   type(attribute_info),    optional, intent(in) :: global_atts(:) !< Global attributes to
-                                                     !! write to this file
+  !! write to this file
+  logical, optional, intent(in) :: do_compress
 
   logical        :: use_lath, use_lonh, use_latq, use_lonq, use_time
   logical        :: use_layer, use_int, use_periodic
@@ -456,10 +457,10 @@ subroutine create_file(IO_handle, filename, vars, novars, fields, threading, tim
     pack = 1
     if (present(checksums)) then
       call write_metadata(IO_handle, fields(k), axes(1:numaxes), vars(k)%name, vars(k)%units, &
-                          vars(k)%longname, pack=pack, checksum=checksums(k,:))
+                          vars(k)%longname, pack=pack, checksum=checksums(k,:), do_compress=do_compress)
     else
       call write_metadata(IO_handle, fields(k), axes(1:numaxes), vars(k)%name, vars(k)%units, &
-                          vars(k)%longname, pack=pack)
+                          vars(k)%longname, pack=pack, do_compress=do_compress)
     endif
   enddo
 

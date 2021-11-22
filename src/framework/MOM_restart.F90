@@ -1040,10 +1040,10 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_
 
     if (CS%parallel_restartfiles) then
       call create_file(IO_handle, trim(restartpath), vars, (next_var-start_var), &
-                       fields, MULTIPLE, G=G, GV=GV, checksums=check_val)
+                       fields, MULTIPLE, G=G, GV=GV, checksums=check_val, do_compress=.false.)
     else
       call create_file(IO_handle, trim(restartpath), vars, (next_var-start_var), &
-                       fields, SINGLE_FILE, G=G, GV=GV, checksums=check_val)
+                       fields, SINGLE_FILE, G=G, GV=GV, checksums=check_val, do_compress=.false.)
     endif
 
     do m=start_var,next_var-1
