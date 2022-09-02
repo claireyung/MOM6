@@ -14,7 +14,6 @@ use MOM_grid,          only : ocean_grid_type
 use MOM_safe_alloc,    only : safe_alloc_ptr, safe_alloc_alloc
 use MOM_string_functions, only : lowercase, uppercase, slasher
 use MOM_time_manager,  only : time_type
-use MOM_unit_scaling,  only : unit_scale_type
 
 implicit none ; private
 
@@ -92,8 +91,6 @@ type, public :: diag_ctrl
   !> default missing value to be sent to ALL diagnostics registerations
   real :: missing_value = -1.0e34
 
-  type(unit_scale_type), pointer :: US => null() !< A dimensional unit scaling type
-
 end type diag_ctrl
 
 contains
@@ -108,7 +105,8 @@ subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
 !   This subroutine sets up the grid and axis information for use by the ice shelf model.
 
   ! Local variables
-  integer :: id_xq, id_yq, id_xh, id_yh
+  integer :: id_xq, id_yq, id_zl, id_zi, id_xh, id_yh, id_ct, id_ct0
+  integer :: k
   logical :: Cartesian_grid
   character(len=80) :: grid_config, units_temp, set_name
 ! This include declares and sets the variable "version".
@@ -376,8 +374,8 @@ subroutine enable_averages(time_int, time_end, diag_CS, T_to_s)
 
   if (present(T_to_s)) then
     diag_cs%time_int = time_int*T_to_s
-  elseif (associated(diag_CS%US)) then
-    diag_cs%time_int = time_int*diag_CS%US%T_to_s
+!  elseif (associated(diag_CS%US)) then
+!    diag_cs%time_int = time_int*diag_CS%US%T_to_s
   else
     diag_cs%time_int = time_int
   endif
@@ -396,12 +394,14 @@ logical function query_averaging_enabled(diag_cs, time_int, time_end)
   query_averaging_enabled = diag_cs%ave_enabled
 end function query_averaging_enabled
 
-!> This subroutine initializes the diag_manager via the MOM6 infrastructure
 subroutine MOM_IS_diag_mediator_infrastructure_init(err_msg)
+  ! This subroutine initializes the FMS diag_manager.
   character(len=*), optional, intent(out)   :: err_msg !< An error message
 
   call MOM_diag_manager_init(err_msg=err_msg)
 end subroutine MOM_IS_diag_mediator_infrastructure_init
+
+!> diag_mediator_init initializes the MOM diag_mediator and opens the available
 
 !> Return the currently specified valid end time for diagnostics
 function get_diag_time_end(diag_cs)
@@ -531,6 +531,7 @@ integer function register_MOM_IS_static_field(module_name, field_name, axes, &
   integer,          optional, intent(in) :: tile_count   !< no clue (not used in MOM_IS?)
 
   ! Local variables
+  character(len=240) :: mesg
   real :: MOM_missing_value
   integer :: primary_id, fms_id
   type(diag_ctrl), pointer :: diag_cs !< A structure that is used to regulate diagnostic output
@@ -563,7 +564,7 @@ subroutine describe_option(opt_name, value, diag_CS)
 
   ! Local variables
   character(len=240) :: mesg
-  integer :: len_ind
+  integer :: start_ind = 1, end_ind, len_ind
 
   len_ind = len_trim(value)
 
@@ -593,12 +594,11 @@ function i2s(a, n_in)
 end function i2s
 
 !> Initialize the MOM_IS diag_mediator and opens the available diagnostics file.
-subroutine MOM_IS_diag_mediator_init(G, US, param_file, diag_cs, component, err_msg, &
+subroutine MOM_IS_diag_mediator_init(G, param_file, diag_cs, component, err_msg, &
                                   doc_file_dir)
-  type(ocean_grid_type),      intent(inout) :: G   !< The horizontal grid type
-  type(unit_scale_type), target, intent(in) :: US !< A dimensional unit scaling type
+  type(ocean_grid_type),    intent(inout) :: G   !< The horizontal grid type
   type(param_file_type),      intent(in)    :: param_file !< A structure to parse for run-time parameters
-  type(diag_ctrl),            intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
+  type(diag_ctrl),        intent(inout) :: diag_cs !< A structure that is used to regulate diagnostic output
   character(len=*), optional, intent(in)    :: component !< An opitonal component name
   character(len=*), optional, intent(out)   :: err_msg !< A string for a returned error message
   character(len=*), optional, intent(in)    :: doc_file_dir !< A directory in which to create the file
@@ -622,7 +622,6 @@ subroutine MOM_IS_diag_mediator_init(G, US, param_file, diag_cs, component, err_
   diag_cs%next_free_diag_id = 1
   diag_cs%diags(:)%in_use = .false.
 
-  diag_cs%US => US
   diag_cs%is = G%isc - (G%isd-1) ; diag_cs%ie = G%iec - (G%isd-1)
   diag_cs%js = G%jsc - (G%jsd-1) ; diag_cs%je = G%jec - (G%jsd-1)
   diag_cs%isd = G%isd ; diag_cs%ied = G%ied ; diag_cs%jsd = G%jsd ; diag_cs%jed = G%jed

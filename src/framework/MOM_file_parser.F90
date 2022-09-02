@@ -4,8 +4,7 @@ module MOM_file_parser
 ! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms, only : root_PE, broadcast
-use MOM_coms, only : any_across_PEs
-use MOM_error_handler, only : MOM_error, FATAL, WARNING, MOM_mesg, assert
+use MOM_error_handler, only : MOM_error, FATAL, WARNING, MOM_mesg
 use MOM_error_handler, only : is_root_pe, stdlog, stdout
 use MOM_time_manager, only : get_time, time_type, get_ticks_per_second
 use MOM_time_manager, only : set_date, get_date, real_to_time, operator(-), set_time
@@ -16,14 +15,13 @@ use MOM_string_functions, only : left_real, left_reals
 
 implicit none ; private
 
-! These are hard-coded limits that are used in the following code.  They should be set
-! generously enough not to impose any significant limitations.
 integer, parameter, public :: MAX_PARAM_FILES = 5 !< Maximum number of parameter files.
-integer, parameter :: INPUT_STR_LENGTH = 1024 !< Maximum line length in parameter file.  Lines that
-                                              !! are combined by ending in '\' or '&' can exceed
-                                              !! this limit after merging.
-integer, parameter :: FILENAME_LENGTH = 200   !< Maximum number of characters in file names.
+integer, parameter :: INPUT_STR_LENGTH = 320 !< Maximum line length in parameter file.
+integer, parameter :: FILENAME_LENGTH = 200  !< Maximum number of characters in file names.
 
+! The all_PEs_read option should be eliminated with post-riga shared code.
+logical :: all_PEs_read = .false. !< If true, all PEs read the input files
+                                  !! TODO: Eliminate this parameter
 
 !>@{ Default values for parameters
 logical, parameter :: report_unused_default = .true.
@@ -33,28 +31,22 @@ logical, parameter :: complete_doc_default = .true.
 logical, parameter :: minimal_doc_default = .true.
 !>@}
 
-
-!> A simple type to allow lines in an array to be allocated with variable sizes.
-type, private :: file_line_type ; private
-  character(len=:), allocatable :: line !< An allocatable line with content
-end type file_line_type
-
 !> The valid lines extracted from an input parameter file without comments
 type, private :: file_data_type ; private
   integer :: num_lines = 0 !< The number of lines in this type
-  type(file_line_type), allocatable, dimension(:) :: fln !< Lines with the input content.
-  logical,                  pointer, dimension(:) :: line_used => NULL() !< If true, the line has been read
+  character(len=INPUT_STR_LENGTH), pointer, dimension(:) :: line => NULL() !< The line content
+  logical,                         pointer, dimension(:) :: line_used => NULL() !< If true, the line has been read
 end type file_data_type
 
 !> A link in the list of variables that have already had override warnings issued
-type, private :: link_parameter ; private
+type :: link_parameter ; private
   type(link_parameter), pointer :: next => NULL() !< Facilitates linked list
   character(len=80) :: name                       !< Parameter name
   logical :: hasIssuedOverrideWarning = .false.   !< Has a default value
 end type link_parameter
 
 !> Specify the active parameter block
-type, private :: parameter_block ; private
+type :: parameter_block ; private
   character(len=240) :: name = ''   !< The active parameter block name
 end type parameter_block
 
@@ -76,9 +68,6 @@ type, public :: param_file_type ; private
   logical  :: log_to_stdout = log_to_stdout_default !< If true, all log
                                     !! messages are also sent to stdout.
   logical  :: log_open = .false.    !< True if the log file has been opened.
-  integer  :: max_line_len = 4      !< The maximum number of characters in the lines
-                                    !! in any of the files in this param_file_type after
-                                    !! any continued lines have been combined.
   integer  :: stdout                !< The unit number from stdout().
   integer  :: stdlog                !< The unit number from stdlog().
   character(len=240) :: doc_file    !< A file where all run-time parameters, their
@@ -136,7 +125,7 @@ subroutine open_param_file(filename, CS, checkable, component, doc_file_dir)
                                          !! the documentation files.  The default is effectively './'.
 
   ! Local variables
-  logical :: file_exists, Netcdf_file, may_check, reopened_file
+  logical :: file_exists, unit_in_use, Netcdf_file, may_check
   integer :: ios, iounit, strlen, i
   character(len=240) :: doc_path
   type(parameter_block), pointer :: block => NULL()
@@ -151,29 +140,30 @@ subroutine open_param_file(filename, CS, checkable, component, doc_file_dir)
 
   ! Check that this file has not already been opened
   if (CS%nfiles > 0) then
-    reopened_file = .false.
     inquire(file=trim(filename), number=iounit)
     if (iounit /= -1) then
       do i = 1, CS%nfiles
         if (CS%iounit(i) == iounit) then
-          call assert(trim(CS%filename(1)) == trim(filename), &
+          if (trim(CS%filename(1)) /= trim(filename)) then
+            call MOM_error(FATAL, &
               "open_param_file: internal inconsistency! "//trim(filename)// &
               " is registered as open but has the wrong unit number!")
-          call MOM_error(WARNING, &
+          else
+            call MOM_error(WARNING, &
               "open_param_file: file "//trim(filename)// &
               " has already been opened. This should NOT happen!"// &
               " Did you specify the same file twice in a namelist?")
-          reopened_file = .true.
+            return
+          endif ! filenames
         endif ! unit numbers
       enddo ! i
     endif
-    if (any_across_PEs(reopened_file)) return
   endif
 
   ! Check that the file exists to readstdlog
   inquire(file=trim(filename), exist=file_exists)
   if (.not.file_exists) call MOM_error(FATAL, &
-      "open_param_file: Input file '"// trim(filename)//"' does not exist.")
+      "open_param_file: Input file "// trim(filename)//" does not exist.")
 
   Netcdf_file = .false.
   if (strlen > 3) then
@@ -183,10 +173,19 @@ subroutine open_param_file(filename, CS, checkable, component, doc_file_dir)
   if (Netcdf_file) &
     call MOM_error(FATAL,"open_param_file: NetCDF files are not yet supported.")
 
-  if (is_root_pe()) then
-    open(newunit=iounit, file=trim(filename), access='SEQUENTIAL', &
+  if (all_PEs_read .or. is_root_pe()) then
+    ! Find an unused unit number.
+    do iounit=10,512
+      INQUIRE(iounit,OPENED=unit_in_use) ; if (.not.unit_in_use) exit
+    enddo
+    if (iounit >= 512) call MOM_error(FATAL, &
+        "open_param_file: No unused file unit could be found.")
+
+    ! Open the parameter file.
+    open(iounit, file=trim(filename), access='SEQUENTIAL', &
          form='FORMATTED', action='READ', position='REWIND', iostat=ios)
-    if (ios /= 0) call MOM_error(FATAL, "open_param_file: Error opening '"//trim(filename)//"'.")
+    if (ios /= 0) call MOM_error(FATAL, "open_param_file: Error opening "// &
+                                       trim(filename))
   else
     iounit = 1
   endif
@@ -201,11 +200,10 @@ subroutine open_param_file(filename, CS, checkable, component, doc_file_dir)
   if (associated(CS%blockName)) deallocate(CS%blockName)
   allocate(block) ; block%name = '' ; CS%blockName => block
 
-  call MOM_mesg("open_param_file: "// trim(filename)//" has been opened successfully.", 5)
+  call MOM_mesg("open_param_file: "// trim(filename)// &
+                 " has been opened successfully.", 5)
 
   call populate_param_data(iounit, filename, CS%param_data(i))
-  ! Increment the maximum line length, but always report values in blocks of 4 characters.
-  CS%max_line_len = max(CS%max_line_len, 4 + 4*(max_input_line_length(CS, i) - 1) / 4)
 
   call read_param(CS,"SEND_LOG_TO_STDOUT",CS%log_to_stdout)
   call read_param(CS,"REPORT_UNUSED_PARAMS",CS%report_unused)
@@ -259,19 +257,17 @@ subroutine close_param_file(CS, quiet_close, component)
 
   if (present(quiet_close)) then ; if (quiet_close) then
     do i = 1, CS%nfiles
-      if (is_root_pe()) close(CS%iounit(i))
+      if (all_PEs_read .or. is_root_pe()) close(CS%iounit(i))
       call MOM_mesg("close_param_file: "// trim(CS%filename(i))// &
                     " has been closed successfully.", 5)
       CS%iounit(i) = -1
       CS%filename(i) = ''
       CS%NetCDF_file(i) = .false.
-      do n=1,CS%param_data(i)%num_lines ; deallocate(CS%param_data(i)%fln(n)%line) ; enddo
-      deallocate (CS%param_data(i)%fln)
+      deallocate (CS%param_data(i)%line)
       deallocate (CS%param_data(i)%line_used)
     enddo
     CS%log_open = .false.
     call doc_end(CS%doc)
-    deallocate(CS%doc)
     return
   endif ; endif
 
@@ -324,18 +320,18 @@ subroutine close_param_file(CS, quiet_close, component)
           num_unused = num_unused + 1
           if (CS%report_unused) &
             call MOM_error(WARNING, "Unused line in "//trim(CS%filename(i))// &
-                            " : "//trim(CS%param_data(i)%fln(n)%line))
+                            " : "//trim(CS%param_data(i)%line(n)))
         endif
       enddo
     endif
 
-    if (is_root_pe()) close(CS%iounit(i))
-    call MOM_mesg("close_param_file: "// trim(CS%filename(i))//" has been closed successfully.", 5)
+    if (all_PEs_read .or. is_root_pe()) close(CS%iounit(i))
+    call MOM_mesg("close_param_file: "// trim(CS%filename(i))// &
+                  " has been closed successfully.", 5)
     CS%iounit(i) = -1
     CS%filename(i) = ''
     CS%NetCDF_file(i) = .false.
-    do n=1,CS%param_data(i)%num_lines ; deallocate(CS%param_data(i)%fln(n)%line) ; enddo
-    deallocate (CS%param_data(i)%fln)
+    deallocate (CS%param_data(i)%line)
     deallocate (CS%param_data(i)%line_used)
   enddo
   deallocate(CS%blockName)
@@ -345,7 +341,7 @@ subroutine close_param_file(CS, quiet_close, component)
 
   CS%log_open = .false.
   call doc_end(CS%doc)
-  deallocate(CS%doc)
+
 end subroutine close_param_file
 
 !> Read the contents of a parameter input file, and store the contents in a
@@ -358,32 +354,29 @@ subroutine populate_param_data(iounit, filename, param_data)
 
   ! Local variables
   character(len=INPUT_STR_LENGTH) :: line
-  character(len=1), allocatable, dimension(:) :: char_buf
-  integer, allocatable, dimension(:) :: line_len ! The trimmed length of each processed input line
-  integer :: n, num_lines, total_chars, ch, rsc, llen, int_buf(2)
+  integer :: num_lines
   logical :: inMultiLineComment
 
   ! Find the number of keyword lines in a parameter file
-  if (is_root_pe()) then
+  ! Allocate the space to hold the lines in param_data%line
+  ! Populate param_data%line with the keyword lines from parameter file
+
+  if (iounit <= 0) return
+
+  if (all_PEs_read .or. is_root_pe()) then
     ! rewind the parameter file
     rewind(iounit)
 
     ! count the number of valid entries in the parameter file
     num_lines = 0
-    total_chars = 0
     inMultiLineComment = .false.
     do while(.true.)
-      read(iounit, '(a)', end=8) line
+      read(iounit, '(a)', end=8, err=9) line
       line = replaceTabs(line)
       if (inMultiLineComment) then
         if (closeMultiLineComment(line)) inMultiLineComment=.false.
       else
-        if (lastNonCommentNonBlank(line)>0) then
-          line = removeComments(line)
-          line = simplifyWhiteSpace(line(:len_trim(line)))
-          num_lines = num_lines + 1
-          total_chars = total_chars + len_trim(line)
-        endif
+        if (lastNonCommentNonBlank(line)>0) num_lines = num_lines + 1
         if (openMultiLineComment(line)) inMultiLineComment=.true.
       endif
     enddo ! while (.true.)
@@ -393,76 +386,60 @@ subroutine populate_param_data(iounit, filename, param_data)
       call MOM_error(FATAL, 'MOM_file_parser : A C-style multi-line comment '// &
                       '(/* ... */) was not closed before the end of '//trim(filename))
 
-
-    int_buf(1) = num_lines
-    int_buf(2) = total_chars
+    ! allocate space to hold contents of the parameter file
+    param_data%num_lines = num_lines
   endif  ! (is_root_pe())
 
   ! Broadcast the number of valid entries in parameter file
-  call broadcast(int_buf, 2, root_pe())
-  num_lines = int_buf(1)
-  total_chars = int_buf(2)
+  if (.not. all_PEs_read) then
+    call broadcast(param_data%num_lines, root_pe())
+  endif
 
   ! Set up the space for storing the actual lines.
-  param_data%num_lines = num_lines
-  allocate (line_len(num_lines), source=0)
-  allocate (char_buf(total_chars), source=" ")
+  num_lines = param_data%num_lines
+  allocate (param_data%line(num_lines))
+  allocate (param_data%line_used(num_lines))
+  param_data%line(:) = ' '
+  param_data%line_used(:) = .false.
 
   ! Read the actual lines.
-  if (is_root_pe()) then
+  if (all_PEs_read .or. is_root_pe()) then
     ! rewind the parameter file
     rewind(iounit)
 
-    ! Populate param_data%fln%line
+    ! Populate param_data%line
     num_lines = 0
-    rsc = 0
     do while(.true.)
-      read(iounit, '(a)', end=18) line
+      read(iounit, '(a)', end=18, err=9) line
       line = replaceTabs(line)
       if (inMultiLineComment) then
         if (closeMultiLineComment(line)) inMultiLineComment=.false.
       else
         if (lastNonCommentNonBlank(line)>0) then
           line = removeComments(line)
-          if ((len_trim(line) > 1000) .and. is_root_PE()) then
-            call MOM_error(WARNING, "MOM_file_parser: Consider using continuation to split up "//&
-                                    "the excessivley long parameter input line "//trim(line))
-          endif
           line = simplifyWhiteSpace(line(:len_trim(line)))
           num_lines = num_lines + 1
-          llen = len_trim(line)
-          line_len(num_lines) = llen
-          do ch=1,llen ; char_buf(rsc+ch)(1:1) = line(ch:ch) ; enddo
-          rsc = rsc + llen
+          param_data%line(num_lines) = line
         endif
         if (openMultiLineComment(line)) inMultiLineComment=.true.
       endif
     enddo ! while (.true.)
 18  continue ! get here when read() reaches EOF
 
-    call assert(num_lines == param_data%num_lines, &
-        'MOM_file_parser: Found different number of valid lines on second ' &
-        // 'reading of '//trim(filename))
+    if (num_lines /= param_data%num_lines) &
+      call MOM_error(FATAL, 'MOM_file_parser : Found different number of '// &
+                      'valid lines on second reading of '//trim(filename))
   endif  ! (is_root_pe())
 
-  ! Broadcast the populated arrays line_len and char_buf
-  call broadcast(line_len, num_lines, root_pe())
-  call broadcast(char_buf(1:total_chars), 1, root_pe())
+  ! Broadcast the populated array param_data%line
+  if (.not. all_PEs_read) then
+    call broadcast(param_data%line, INPUT_STR_LENGTH, root_pe())
+  endif
 
-  ! Allocate space to hold contents of the parameter file, including the lines in param_data%fln
-  allocate(param_data%fln(num_lines))
-  allocate(param_data%line_used(num_lines))
-  param_data%line_used(:) = .false.
-  ! Populate param_data%fln%line with the keyword lines from parameter file
-  rsc = 0
-  do n=1,num_lines
-    line(1:INPUT_STR_LENGTH) = " "
-    do ch=1,line_len(n) ; line(ch:ch) = char_buf(rsc+ch)(1:1) ; enddo
-    param_data%fln(n)%line = trim(line)
-    rsc = rsc + line_len(n)
-  enddo
+  return
 
-  deallocate(char_buf) ; deallocate(line_len)
+9 call MOM_error(FATAL, "MOM_file_parser : "//&
+                  "Error while reading file "//trim(filename))
 
 end subroutine populate_param_data
 
@@ -612,7 +589,7 @@ subroutine read_param_int(CS, varname, value, fail_if_missing)
   logical,      optional, intent(in) :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
   logical            :: found, defined
 
   call get_variable_line(CS, varname, found, defined, value_string)
@@ -644,7 +621,7 @@ subroutine read_param_int_array(CS, varname, value, fail_if_missing)
   logical,      optional, intent(in) :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
   logical            :: found, defined
 
   call get_variable_line(CS, varname, found, defined, value_string)
@@ -680,7 +657,7 @@ subroutine read_param_real(CS, varname, value, fail_if_missing, scale)
                                          !! by before it is returned.
 
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
   logical            :: found, defined
 
   call get_variable_line(CS, varname, found, defined, value_string)
@@ -716,8 +693,8 @@ subroutine read_param_real_array(CS, varname, value, fail_if_missing, scale)
                                          !! by before it is returned.
 
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
-  logical                        :: found, defined
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
+  logical                         :: found, defined
 
   call get_variable_line(CS, varname, found, defined, value_string)
   if (found .and. defined .and. (LEN_TRIM(value_string(1)) > 0)) then
@@ -751,14 +728,15 @@ subroutine read_param_char(CS, varname, value, fail_if_missing)
   logical,      optional, intent(in) :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
   logical            :: found, defined
 
   call get_variable_line(CS, varname, found, defined, value_string)
   if (found) then
     value = trim(strip_quotes(value_string(1)))
   elseif (present(fail_if_missing)) then ; if (fail_if_missing) then
-    call MOM_error(FATAL, 'Unable to find variable '//trim(varname)//' in any input files.')
+    call MOM_error(FATAL,'Unable to find variable '//trim(varname)// &
+                         ' in any input files.')
   endif ; endif
 
 end subroutine read_param_char
@@ -774,7 +752,7 @@ subroutine read_param_char_array(CS, varname, value, fail_if_missing)
                                          !! if this variable is not found in the parameter file
 
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1), loc_string
+  character(len=INPUT_STR_LENGTH) :: value_string(1), loc_string
   logical            :: found, defined
   integer            :: i, i_out
 
@@ -795,7 +773,8 @@ subroutine read_param_char_array(CS, varname, value, fail_if_missing)
     endif
     do i=i_out,SIZE(value) ; value(i) = " " ; enddo
   elseif (present(fail_if_missing)) then ; if (fail_if_missing) then
-    call MOM_error(FATAL, 'Unable to find variable '//trim(varname)//' in any input files.')
+    call MOM_error(FATAL,'Unable to find variable '//trim(varname)// &
+                         ' in any input files.')
   endif ; endif
 
 end subroutine read_param_char_array
@@ -811,14 +790,15 @@ subroutine read_param_logical(CS, varname, value, fail_if_missing)
                                          !! if this variable is not found in the parameter file
 
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
   logical            :: found, defined
 
   call get_variable_line(CS, varname, found, defined, value_string, paramIsLogical=.true.)
   if (found) then
     value = defined
   elseif (present(fail_if_missing)) then ; if (fail_if_missing) then
-    call MOM_error(FATAL, 'Unable to find variable '//trim(varname)//' in any input files.')
+    call MOM_error(FATAL,'Unable to find variable '//trim(varname)// &
+                         ' in any input files.')
   endif ; endif
 end subroutine read_param_logical
 
@@ -837,7 +817,7 @@ subroutine read_param_time(CS, varname, value, timeunit, fail_if_missing, date_f
                                          !! later be logged in the same format.
 
   ! Local variables
-  character(len=CS%max_line_len) :: value_string(1)
+  character(len=INPUT_STR_LENGTH) :: value_string(1)
   character(len=240) :: err_msg
   logical            :: found, defined
   real               :: real_time, time_unit
@@ -879,9 +859,11 @@ subroutine read_param_time(CS, varname, value, timeunit, fail_if_missing, date_f
   else
     if (present(fail_if_missing)) then ; if (fail_if_missing) then
       if (.not.found) then
-        call MOM_error(FATAL, 'Unable to find variable '//trim(varname)//' in any input files.')
+        call MOM_error(FATAL,'Unable to find variable '//trim(varname)// &
+                             ' in any input files.')
       else
-        call MOM_error(FATAL, 'Variable '//trim(varname)//' found but not set in input files.')
+        call MOM_error(FATAL,'Variable '//trim(varname)// &
+                             ' found but not set in input files.')
       endif
     endif ; endif
   endif
@@ -893,8 +875,8 @@ end subroutine read_param_time
 
 !> This function removes single and double quotes from a character string
 function strip_quotes(val_str)
-  character(len=*), intent(in) :: val_str !< The character string to work on
-  character(len=len(val_str)) :: strip_quotes
+  character(len=*) :: val_str !< The character string to work on
+  character(len=INPUT_STR_LENGTH) :: strip_quotes
   ! Local variables
   integer :: i
   strip_quotes = val_str
@@ -912,68 +894,7 @@ function strip_quotes(val_str)
   enddo
 end function strip_quotes
 
-!> This function returns the maximum number of characters in any input lines after they
-!! have been combined by any line continuation.
-function max_input_line_length(CS, pf_num) result(max_len)
-  type(param_file_type),  intent(in) :: CS      !< The control structure for the file_parser module,
-                                                !! it is also a structure to parse for run-time parameters
-  integer,      optional, intent(in) :: pf_num  !< If present, only work on a single file in the
-                                                !! param_file_type, or return 0 if this exceeds the
-                                                !! number of files in the param_file_type.
-  integer :: max_len !< The maximum number of characters in any input lines after they
-                     !! have been combined by any line continuation.
-
-  ! Local variables
-  character(len=FILENAME_LENGTH) :: filename
-  character :: last_char
-  integer :: ipf, ipf_s, ipf_e
-  integer :: last, line_len, count, contBufSize
-  logical :: continuedLine
-
-  max_len = 0
-  ipf_s = 1 ; ipf_e = CS%nfiles
-  if (present(pf_num)) then
-    if (pf_num > CS%nfiles) return
-    ipf_s = pf_num ; ipf_e = pf_num
-  endif
-
-  paramfile_loop: do ipf = ipf_s, ipf_e
-    filename = CS%filename(ipf)
-    contBufSize = 0
-    continuedLine = .false.
-
-    ! Scan through each line of the file
-    do count = 1, CS%param_data(ipf)%num_lines
-      ! line = CS%param_data(ipf)%fln(count)%line
-      last = len_trim(CS%param_data(ipf)%fln(count)%line)
-      last_char = " "
-      if (last > 0) last_char = CS%param_data(ipf)%fln(count)%line(last:last)
-      ! Check if line ends in continuation character (either & or \)
-      ! Note achar(92) is a backslash
-      if (last_char == achar(92) .or. last_char == "&") then
-        contBufSize = contBufSize + last - 1
-        continuedLine = .true.
-        if (count==CS%param_data(ipf)%num_lines .and. is_root_pe()) &
-           call MOM_error(FATAL, "MOM_file_parser : the last line of the file ends in a"// &
-                 " continuation character but there are no more lines to read. "// &
-                 " Line: '"//trim(CS%param_data(ipf)%fln(count)%line(:last))//"'"// &
-                 " in file "//trim(filename)//".")
-        cycle ! cycle inorder to append the next line of the file
-      elseif (continuedLine) then
-        ! If we reached this point then this is the end of line continuation
-        line_len = contBufSize + last
-        contBufSize = 0
-        continuedLine = .false.
-      else  ! This is a simple line with no continuation.
-        line_len = last
-      endif
-      max_len = max(max_len, line_len)
-    enddo ! CS%param_data(ipf)%num_lines
-  enddo paramfile_loop
-
-end function max_input_line_length
-
-!> This subroutine extracts the contents of lines in the param_file_type that refer to
+!> This subtoutine extracts the contents of lines in the param_file_type that refer to
 !! a named parameter.  The value_string that is returned must be interepreted in a way
 !! that depends on the type of this variable.
 subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsLogical)
@@ -987,11 +908,10 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
                                                 !! that can be simply defined without parsing a value_string.
 
   ! Local variables
-  character(len=CS%max_line_len) :: val_str, lname, origLine
-  character(len=CS%max_line_len) :: line, continuationBuffer
-  character(len=240) :: blockName
-  character(len=FILENAME_LENGTH) :: filename
-  integer            :: is, id, isd, isu, ise, iso, ipf
+  character(len=INPUT_STR_LENGTH) :: val_str, lname, origLine
+  character(len=INPUT_STR_LENGTH) :: line, continuationBuffer, blockName
+  character(len=FILENAME_LENGTH)  :: filename
+  integer            :: is, id, isd, isu, ise, iso, verbose, ipf
   integer            :: last, last1, ival, oval, max_vals, count, contBufSize
   character(len=52)  :: set
   logical            :: found_override, found_equals
@@ -1000,10 +920,10 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
   logical            :: variableKindIsLogical, valueIsSame
   logical            :: inWrongBlock, fullPathParameter
   logical, parameter :: requireNamedClose = .false.
-  integer, parameter :: verbose = 1
   set = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-  continuationBuffer = repeat(" ", CS%max_line_len)
+  continuationBuffer = repeat(" ",INPUT_STR_LENGTH)
   contBufSize = 0
+  verbose = 1
 
   variableKindIsLogical=.false.
   if (present(paramIsLogical)) variableKindIsLogical = paramIsLogical
@@ -1023,7 +943,7 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
 
     ! Scan through each line of the file
     do count = 1, CS%param_data(ipf)%num_lines
-      line = CS%param_data(ipf)%fln(count)%line
+      line = CS%param_data(ipf)%line(count)
       last = len_trim(line)
 
       last1 = max(1,last)
@@ -1044,7 +964,7 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
         ! If we reached this point then this is the end of line continuation
         continuationBuffer(contBufSize+1:contBufSize+len_trim(line))=line(:last)
         line = continuationBuffer
-        continuationBuffer=repeat(" ",CS%max_line_len) ! Clear for next use
+        continuationBuffer=repeat(" ",INPUT_STR_LENGTH) ! Clear for next use
         contBufSize = 0
         continuedLine = .false.
         last = len_trim(line)
@@ -1064,6 +984,25 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
         if (index(line(:last), "#override define ")==1) found_define = .true.
         if (index(line(:last), "#override undef ")==1) found_undef = .true.
         line = trim(adjustl(line(iso+10:last))); last = len_trim(line)
+      endif
+
+      ! Check for start of fortran namelist, ie. '&namelist'
+      if (index(line(:last),'&')==1) then
+        iso=index(line(:last),' ')
+        if (iso>0) then ! possibly simething else on this line
+          blockName = pushBlockLevel(blockName,line(2:iso-1))
+          line=trim(adjustl(line(iso:last)))
+          last=len_trim(line)
+          if (last==0) cycle ! nothing else on this line
+        else ! just the namelist on this line
+          if (len_trim(blockName)>0) then
+            blockName = trim(blockName) // '%' //trim(line(2:last))
+          else
+            blockName = trim(line(2:last))
+          endif
+          call flag_line_as_read(CS%param_data(ipf)%line_used,count)
+          cycle
+        endif
       endif
 
       ! Newer form of parameter block, block%, %block or block%param or
@@ -1103,6 +1042,14 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
         if (trim(CS%blockName%name)/=trim(blockName)) inWrongBlock = .true. ! Not in the required block
       endif
 
+      ! Check for termination of a fortran namelist (with a '/')
+      if (line(last:last)=='/') then
+        if (len_trim(blockName)==0 .and. is_root_pe()) call MOM_error(FATAL, &
+            'get_variable_line: An extra namelist/block end was encountered. Line="'// &
+            trim(line(:last))//'"' )
+        blockName = popBlockLevel(blockName)
+        last = last - 1 ! Ignore the termination character from here on
+      endif
       if (inWrongBlock .and. .not. fullPathParameter) then
         if (index(" "//line(:last+1), " "//trim(varname)//" ")>0) &
           call MOM_error(WARNING,"MOM_file_parser : "//trim(varname)// &
@@ -1122,28 +1069,29 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
       if (index(line(:last), "#undef ")==1) found_undef = .true.
 
       ! Check for missing, mutually exclusive or incomplete keywords
-      if (.not. (found_define .or. found_undef .or. found_equals)) then
-        if (found_override) then
-          call MOM_error(FATAL, "MOM_file_parser : override was found " // &
-              " without a define or undef." // &
-              " Line: '" // trim(line(:last)) // "'" // &
-              " in file " // trim(filename) // ".")
-        else
-          call MOM_error(FATAL, "MOM_file_parser : the parameter name '" // &
-              trim(varname) // "' was found without define or undef." // &
-              " Line: '" // trim(line(:last)) // "'" // &
-              " in file " // trim(filename) // ".")
-        endif
+      if (is_root_pe()) then
+        if (.not. (found_define .or. found_undef .or. found_equals)) &
+               call MOM_error(FATAL, "MOM_file_parser : the parameter name '"// &
+                 trim(varname)//"' was found without define or undef."// &
+                 " Line: '"//trim(line(:last))//"'"//&
+                 " in file "//trim(filename)//".")
+        if (found_define .and. found_undef) call MOM_error(FATAL, &
+                 "MOM_file_parser : Both 'undef' and 'define' occur."// &
+                 " Line: '"//trim(line(:last))//"'"//&
+                 " in file "//trim(filename)//".")
+        if (found_equals .and. (found_define .or. found_undef)) &
+               call MOM_error(FATAL, &
+                 "MOM_file_parser : Both 'a=b' and 'undef/define' syntax occur."// &
+                 " Line: '"//trim(line(:last))//"'"//&
+                 " in file "//trim(filename)//".")
+        if (found_override .and. .not. (found_define .or. found_undef .or. found_equals)) &
+               call MOM_error(FATAL, "MOM_file_parser : override was found "// &
+                 " without a define or undef."// &
+                 " Line: '"//trim(line(:last))//"'"//&
+                 " in file "//trim(filename)//".")
       endif
 
-      if (found_equals .and. (found_define .or. found_undef)) &
-             call MOM_error(FATAL, &
-               "MOM_file_parser : Both 'a=b' and 'undef/define' syntax occur."// &
-               " Line: '"//trim(line(:last))//"'"//&
-               " in file "//trim(filename)//".")
-
       ! Interpret the line and collect values, if any
-      ! NOTE: At least one of these must be true
       if (found_define) then
         ! Move starting pointer to first letter of defined name.
         is = isd + 5 + scan(line(isd+6:last), set)
@@ -1183,6 +1131,10 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
           defined_in_line = .true.
         endif
         found = .true.
+      else
+        call MOM_error(FATAL, "MOM_file_parser (non-root PE?): the parameter name '"// &
+           trim(varname)//"' was found without an assignment, define or undef."// &
+           " Line: '"//trim(line(:last))//"'"//" in file "//trim(filename)//".")
       endif
 
       ! This line has now been used.
@@ -1249,7 +1201,6 @@ subroutine get_variable_line(CS, varname, found, defined, value_string, paramIsL
         ival = ival + 1
         value_string(ival) = trim(val_str)
         defined = defined_in_line
-
         if (verbose > 1 .and. is_root_pe()) &
           call MOM_error(WARNING,"MOM_file_parser : "//trim(varname)// &
                  " set.  Line: '"//trim(line(:last))//"'"//&
@@ -1268,8 +1219,8 @@ end subroutine get_variable_line
 
 !> Record that a line has been used to set a parameter
 subroutine flag_line_as_read(line_used, count)
-  logical, dimension(:), pointer    :: line_used !< A structure indicating which lines have been read
-  integer,               intent(in) :: count !< The parameter on this line number has been read
+  logical, dimension(:), pointer :: line_used !< A structure indicating which lines have been read
+  integer,            intent(in) :: count !< The parameter on this line number has been read
   line_used(count) = .true.
 end subroutine flag_line_as_read
 
@@ -1393,7 +1344,7 @@ subroutine log_param_int_array(CS, modulename, varname, value, desc, &
   logical,          optional, intent(in) :: like_default !< If present and true, log this parameter as
                                          !! though it has the default value, even if there is no default.
 
-  character(len=CS%max_line_len+120) :: mesg
+  character(len=1320) :: mesg
   character(len=240) :: myunits
 
   write(mesg, '("  ",a," ",a,": ",A)') trim(modulename), trim(varname), trim(left_ints(value))
@@ -1535,16 +1486,16 @@ subroutine log_param_char(CS, modulename, varname, value, desc, units, &
   logical,          optional, intent(in) :: like_default !< If present and true, log this parameter as
                                          !! though it has the default value, even if there is no default.
 
-  character(len=:), allocatable :: mesg
-  character(len=240) :: myunits
+  character(len=1024) :: mesg, myunits
 
-  mesg = "  " // trim(modulename) // " " // trim(varname) // ": " // trim(value)
+  write(mesg, '("  ",a," ",a,": ",a)') &
+    trim(modulename), trim(varname), trim(value)
   if (is_root_pe()) then
     if (CS%log_open) write(CS%stdlog,'(a)') trim(mesg)
     if (CS%log_to_stdout) write(CS%stdout,'(a)') trim(mesg)
   endif
 
-  myunits=" "; if (present(units)) write(myunits(1:240),'(A)') trim(units)
+  myunits=" "; if (present(units)) write(myunits(1:1024),'(A)') trim(units)
   if (present(desc)) &
     call doc_param(CS%doc, varname, desc, myunits, value, default, &
                    layoutParam=layoutParam, debuggingParam=debuggingParam, like_default=like_default)
@@ -1580,7 +1531,7 @@ subroutine log_param_time(CS, modulename, varname, value, desc, units, &
   logical :: use_timeunit, date_format
   character(len=240) :: mesg, myunits
   character(len=80) :: date_string, default_string
-  integer :: days, secs, ticks
+  integer :: days, secs, ticks, ticks_per_sec
 
   use_timeunit = .false.
   date_format = .false. ; if (present(log_date)) date_format = log_date
@@ -1677,7 +1628,7 @@ end function convert_date_to_string
 !! and logs it in documentation files.
 subroutine get_param_int(CS, modulename, varname, value, desc, units, &
                default, fail_if_missing, do_not_read, do_not_log, &
-               layoutParam, debuggingParam)
+               static_value, layoutParam, debuggingParam)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1688,6 +1639,9 @@ subroutine get_param_int(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   integer,          optional, intent(in)    :: default !< The default value of the parameter
+  integer,          optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1706,6 +1660,7 @@ subroutine get_param_int(CS, modulename, varname, value, desc, units, &
 
   if (do_read) then
     if (present(default)) value = default
+    if (present(static_value)) value = static_value
     call read_param_int(CS, varname, value, fail_if_missing)
   endif
 
@@ -1720,7 +1675,7 @@ end subroutine get_param_int
 !! and logs them in documentation files.
 subroutine get_param_int_array(CS, modulename, varname, value, desc, units, &
                default, fail_if_missing, do_not_read, do_not_log, &
-               layoutParam, debuggingParam)
+               static_value, layoutParam, debuggingParam)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1731,6 +1686,9 @@ subroutine get_param_int_array(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   integer,          optional, intent(in)    :: default !< The default value of the parameter
+  integer,          optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1748,7 +1706,8 @@ subroutine get_param_int_array(CS, modulename, varname, value, desc, units, &
   do_log  = .true. ; if (present(do_not_log))  do_log  = .not.do_not_log
 
   if (do_read) then
-    if (present(default)) value(:) = default
+    if (present(default)) then ; value(:) = default ; endif
+    if (present(static_value)) then ; value(:) = static_value ; endif
     call read_param_int_array(CS, varname, value, fail_if_missing)
   endif
 
@@ -1763,7 +1722,7 @@ end subroutine get_param_int_array
 !! and logs it in documentation files.
 subroutine get_param_real(CS, modulename, varname, value, desc, units, &
                default, fail_if_missing, do_not_read, do_not_log, &
-               debuggingParam, scale, unscaled)
+               static_value, debuggingParam, scale, unscaled)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1774,6 +1733,9 @@ subroutine get_param_real(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   real,             optional, intent(in)    :: default !< The default value of the parameter
+  real,             optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1794,6 +1756,7 @@ subroutine get_param_real(CS, modulename, varname, value, desc, units, &
 
   if (do_read) then
     if (present(default)) value = default
+    if (present(static_value)) value = static_value
     call read_param_real(CS, varname, value, fail_if_missing)
   endif
 
@@ -1811,7 +1774,7 @@ end subroutine get_param_real
 !! and logs them in documentation files.
 subroutine get_param_real_array(CS, modulename, varname, value, desc, units, &
                default, fail_if_missing, do_not_read, do_not_log, debuggingParam, &
-               scale, unscaled)
+               static_value, scale, unscaled)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1822,6 +1785,9 @@ subroutine get_param_real_array(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   real,             optional, intent(in)    :: default !< The default value of the parameter
+  real,             optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1841,7 +1807,8 @@ subroutine get_param_real_array(CS, modulename, varname, value, desc, units, &
   do_log  = .true. ; if (present(do_not_log))  do_log  = .not.do_not_log
 
   if (do_read) then
-    if (present(default)) value(:) = default
+    if (present(default)) then ; value(:) = default ; endif
+    if (present(static_value)) then ; value(:) = static_value ; endif
     call read_param_real_array(CS, varname, value, fail_if_missing)
   endif
 
@@ -1859,7 +1826,7 @@ end subroutine get_param_real_array
 !! and logs it in documentation files.
 subroutine get_param_char(CS, modulename, varname, value, desc, units, &
                default, fail_if_missing, do_not_read, do_not_log, &
-               layoutParam, debuggingParam)
+               static_value, layoutParam, debuggingParam)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1870,6 +1837,9 @@ subroutine get_param_char(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   character(len=*), optional, intent(in)    :: default !< The default value of the parameter
+  character(len=*), optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1888,6 +1858,7 @@ subroutine get_param_char(CS, modulename, varname, value, desc, units, &
 
   if (do_read) then
     if (present(default)) value = default
+    if (present(static_value)) value = static_value
     call read_param_char(CS, varname, value, fail_if_missing)
   endif
 
@@ -1901,7 +1872,7 @@ end subroutine get_param_char
 !> This subroutine reads the values of an array of character string model parameters
 !! from a parameter file and logs them in documentation files.
 subroutine get_param_char_array(CS, modulename, varname, value, desc, units, &
-               default, fail_if_missing, do_not_read, do_not_log)
+               default, fail_if_missing, do_not_read, do_not_log, static_value)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1912,6 +1883,9 @@ subroutine get_param_char_array(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   character(len=*), optional, intent(in)    :: default !< The default value of the parameter
+  character(len=*), optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1922,18 +1896,19 @@ subroutine get_param_char_array(CS, modulename, varname, value, desc, units, &
   ! Local variables
   logical :: do_read, do_log
   integer :: i, len_tot, len_val
-  character(len=:), allocatable :: cat_val
+  character(len=1024) :: cat_val
 
   do_read = .true. ; if (present(do_not_read)) do_read = .not.do_not_read
   do_log  = .true. ; if (present(do_not_log))  do_log  = .not.do_not_log
 
   if (do_read) then
-    if (present(default)) value(:) = default
+    if (present(default)) then ; value(:) = default ; endif
+    if (present(static_value)) then ; value(:) = static_value ; endif
     call read_param_char_array(CS, varname, value, fail_if_missing)
   endif
 
   if (do_log) then
-    cat_val = trim(value(1)) ; len_tot = len_trim(value(1))
+    cat_val = trim(value(1)); len_tot = len_trim(value(1))
     do i=2,size(value)
       len_val = len_trim(value(i))
       if ((len_val > 0) .and. (len_tot + len_val + 2 < 240)) then
@@ -1951,7 +1926,7 @@ end subroutine get_param_char_array
 !! and logs it in documentation files.
 subroutine get_param_logical(CS, modulename, varname, value, desc, units, &
                default, fail_if_missing, do_not_read, do_not_log, &
-               layoutParam, debuggingParam)
+               static_value, layoutParam, debuggingParam)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
   character(len=*),           intent(in)    :: modulename !< The name of the calling module
@@ -1962,6 +1937,9 @@ subroutine get_param_logical(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   logical,          optional, intent(in)    :: default !< The default value of the parameter
+  logical,          optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -1980,6 +1958,7 @@ subroutine get_param_logical(CS, modulename, varname, value, desc, units, &
 
   if (do_read) then
     if (present(default)) value = default
+    if (present(static_value)) value = static_value
     call read_param_logical(CS, varname, value, fail_if_missing)
   endif
 
@@ -1994,7 +1973,7 @@ end subroutine get_param_logical
 !! and logs it in documentation files.
 subroutine get_param_time(CS, modulename, varname, value, desc, units, &
                           default, fail_if_missing, do_not_read, do_not_log, &
-                          timeunit, layoutParam, debuggingParam, &
+                          timeunit, static_value, layoutParam, debuggingParam, &
                           log_as_date)
   type(param_file_type),      intent(in)    :: CS      !< The control structure for the file_parser module,
                                          !! it is also a structure to parse for run-time parameters
@@ -2006,6 +1985,9 @@ subroutine get_param_time(CS, modulename, varname, value, desc, units, &
                                          !! present, this parameter is not written to a doc file
   character(len=*), optional, intent(in)    :: units   !< The units of this parameter
   type(time_type),  optional, intent(in)    :: default !< The default value of the parameter
+  type(time_type),  optional, intent(in)    :: static_value !< If this parameter is static, it takes
+                                         !! this value, which can be compared for consistency with
+                                         !! what is in the parameter file.
   logical,          optional, intent(in)    :: fail_if_missing !< If present and true, a fatal error occurs
                                          !! if this variable is not found in the parameter file
   logical,          optional, intent(in)    :: do_not_read  !< If present and true, do not read a
@@ -2021,7 +2003,7 @@ subroutine get_param_time(CS, modulename, varname, value, desc, units, &
   logical,          optional, intent(in)    :: log_as_date  !< If true, log the time_type in date
                                          !! format. The default is false.
 
-  logical :: do_read, do_log, log_date
+  logical :: do_read, do_log, date_format, log_date
 
   do_read = .true. ; if (present(do_not_read)) do_read = .not.do_not_read
   do_log  = .true. ; if (present(do_not_log))  do_log  = .not.do_not_log
@@ -2029,6 +2011,7 @@ subroutine get_param_time(CS, modulename, varname, value, desc, units, &
 
   if (do_read) then
     if (present(default)) value = default
+    if (present(static_value)) value = static_value
     call read_param_time(CS, varname, value, timeunit, fail_if_missing, date_format=log_date)
   endif
 

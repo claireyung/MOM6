@@ -184,6 +184,8 @@ subroutine calculate_density_scalar_nemo(T, S, pressure, rho, rho_ref)
   real,           intent(out) :: rho      !< In situ density [kg m-3].
   real, optional, intent(in)  :: rho_ref  !< A reference density [kg m-3].
 
+  real :: al0, p0, lambda
+  integer :: j
   real, dimension(1) :: T0, S0, pressure0
   real, dimension(1) :: rho0
 
@@ -210,7 +212,7 @@ subroutine calculate_density_array_nemo(T, S, pressure, rho, start, npts, rho_re
   real,     optional, intent(in)  :: rho_ref  !< A reference density [kg m-3].
 
   ! Local variables
-  real :: zp, zt, zs, zr0, zn, zn0, zn1, zn2, zn3, zs0
+  real :: zp, zt, zh, zs, zr0, zn, zn0, zn1, zn2, zn3, zs0
   integer :: j
 
   do j=start,start+npts-1
@@ -257,7 +259,7 @@ subroutine calculate_density_array_nemo(T, S, pressure, rho, start, npts, rho_re
       rho(j) =  ( zn + zr0 ) ! density
     endif
 
-  enddo
+ enddo
 end subroutine calculate_density_array_nemo
 
 !> For a given thermodynamic state, calculate the derivatives of density with conservative
@@ -274,7 +276,7 @@ subroutine calculate_density_derivs_array_nemo(T, S, pressure, drho_dT, drho_dS,
   integer, intent(in)                :: npts     !< The number of values to calculate.
 
   ! Local variables
-  real :: zp, zt, zs, zn, zn0, zn1, zn2, zn3
+  real :: zp,zt , zh , zs , zr0, zn , zn0, zn1, zn2, zn3
   integer :: j
 
   do j=start,start+npts-1
@@ -345,6 +347,8 @@ subroutine calculate_density_derivs_scalar_nemo(T, S, pressure, drho_dt, drho_ds
   real,    intent(out) :: drho_dS  !< The partial derivative of density with salinity,
                                    !! in [kg m-3 ppt-1].
   ! Local variables
+  real :: al0, p0, lambda
+  integer :: j
   real, dimension(1) :: T0, S0, pressure0
   real, dimension(1) :: drdt0, drds0
 
@@ -387,7 +391,7 @@ subroutine calculate_compress_nemo(T, S, pressure, rho, drho_dp, start, npts)
     zt = T(j) !gsw_ct_from_pt(S(j),T(j))  !Convert potantial temp to conservative temp
     zp = pressure(j)* Pa2db         !Convert pressure from Pascal to decibar
     call gsw_rho_first_derivatives(zs,zt,zp, drho_dp=drho_dp(j))
-  enddo
+ enddo
 end subroutine calculate_compress_nemo
 
 end module MOM_EOS_NEMO
