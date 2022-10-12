@@ -60,6 +60,7 @@ subroutine ISOMIP_initialize_topography(D, G, param_file, max_depth, US)
   real :: bx, by          ! dummy vatiables [Z ~> m].
   real :: xtil            ! dummy vatiable
   logical :: is_2D         ! If true, use 2D setup
+  integer :: method       ! dummy vatiable
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "ISOMIP_initialize_topography" ! This subroutine's name.
@@ -73,6 +74,9 @@ subroutine ISOMIP_initialize_topography(D, G, param_file, max_depth, US)
   call get_param(param_file, mdl, "MINIMUM_DEPTH", min_depth, &
                  "The minimum depth of the ocean.", units="m", default=0.0, scale=US%m_to_Z)
   call get_param(param_file, mdl, "ISOMIP_2D",is_2D,'If true, use a 2D setup.', default=.false.)
+  !Pedro
+  call get_param(param_file, mdl, "METHOD_ISOMIP", method)
+  !Pedro
 
   ! The following variables should be transformed into runtime parameters?
   bmax = 720.0*US%m_to_Z ; dc = 500.0*US%m_to_Z
@@ -121,7 +125,8 @@ subroutine ISOMIP_initialize_topography(D, G, param_file, max_depth, US)
       if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
 
       !Pedro
-      D(i,j) = max_depth - 50
+      !Flat bottom
+      if ( method == 1 ) D(i,j) = max_depth - 50
       !Pedro
 
     enddo ; enddo

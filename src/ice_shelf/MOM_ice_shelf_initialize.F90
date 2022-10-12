@@ -209,7 +209,7 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
   real :: edge_pos, shelf_slope_scale, Rho_ocean
   integer :: i, j, jsc, jec, jsd, jed, jedg, nyh, isc, iec, isd, ied
   integer :: j_off
-  integer :: method = 1
+  integer :: method
 
 
   jsc = G%jsc ; jec = G%jec ; isc = G%isc ; iec = G%iec
@@ -229,6 +229,7 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
                  units="axis_units", default=0.0)
   call get_param(PF, mdl, "SHELF_EDGE_POS_0", edge_pos, &
                  units="axis_units", default=0.0)
+  call get_param(PF, mdl, "METHOD_ISOMIP", method)
 !  call get_param(param_file, mdl, "RHO_0", Rho_ocean, &
 !                 "The mean ocean density used with BOUSSINESQ true to "//&
 !                 "calculate accelerations and the mass for conservation "//&
@@ -270,8 +271,8 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
           else
             h_shelf(i,j) = (min_draft + &
                (max_draft - min_draft) * &
-               (c1*(slope_pos - G%geoLonT(i,j))) )
-               !min(1.0, (c1*(slope_pos - G%geoLonT(i,j)))**2) ) Pedro Pedro
+               min(1.0, (c1*(slope_pos - G%geoLonT(i,j)))**2) )
+               !(c1*(slope_pos - G%geoLonT(i,j))) )
           endif
 
         endif
@@ -289,6 +290,8 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
 
   elseif ( method == 1) then
   slope_pos = edge_pos - flat_shelf_width
+  c1 = 0.0 ; if (shelf_slope_scale > 0.0) c1 = 1.0 / shelf_slope_scale
+
   do j=G%jsd,G%jed
     do i=G%isc,G%iec
 
@@ -314,7 +317,7 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
           else
             h_shelf(i,j) = ( min_draft + &
                (max_draft - min_draft) * &
-               (0.25*abs(slope_pos - G%geoLatT(i,j))) )
+               (c1*abs(slope_pos - G%geoLatT(i,j))) )
                !min(1.0, (c1*(slope_pos - G%geoLonT(i,j)))**2) ) Pedro
           endif
 
