@@ -255,7 +255,8 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
           else
             h_shelf(i,j) = (min_draft + &
                (max_draft - min_draft) * &
-               min(1.0, (c1*(slope_pos - G%geoLonT(i,j)))**2) )
+               (c1*abs(slope_pos - G%geoLatT(i,j))) )
+               !min(1.0, (c1*(slope_pos - G%geoLonT(i,j)))**2) ) Pedro
           endif
 
         endif
