@@ -119,6 +119,12 @@ subroutine ISOMIP_initialize_topography(D, G, param_file, max_depth, US)
       D(i,j) = -max(bx+by, -bmax)
       if (D(i,j) > max_depth) D(i,j) = max_depth
       if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
+
+      !Pedro
+      !Flat bottom
+      if (method == 1) D(i,j) = max_depth - 50
+      !Pedro
+
     enddo ; enddo
   endif
 
