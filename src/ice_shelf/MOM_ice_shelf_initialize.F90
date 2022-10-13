@@ -198,6 +198,7 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
   real :: edge_pos, shelf_slope_scale
   integer :: i, j, jsc, jec, jsd, jed, jedg, nyh, isc, iec, isd, ied
   integer :: j_off
+  integer :: method
 
   jsc = G%jsc ; jec = G%jec ; isc = G%isc ; iec = G%iec
   jsd = G%jsd ; jed = G%jed ; isd = G%isd ; ied = G%ied
