@@ -216,6 +216,8 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
                  units="axis_units", default=0.0)
   call get_param(PF, mdl, "SHELF_EDGE_POS_0", edge_pos, &
                  units="axis_units", default=0.0)
+  call get_param(PF, mdl, "METHOD_ISOMIP", method)
+
 !  call get_param(param_file, mdl, "RHO_0", Rho_ocean, &
 !                 "The mean ocean density used with BOUSSINESQ true to "//&
 !                 "calculate accelerations and the mass for conservation "//&
