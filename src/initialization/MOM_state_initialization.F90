@@ -1790,7 +1790,7 @@ subroutine initialize_temp_salt_fit(T, S, G, GV, US, param_file, eqn_of_state, P
   endif
 
   do k=1,nz ; do j=G%jsd,G%jed ; do i=G%isd,G%ied
-    T(i,j,k) = T0(k) ; S(i,j,k) = S0(k)
+    T(i,j,k) = T0(k) ; S(i,j,k) = 34.4 !Pedro S0(k)
   enddo ; enddo ; enddo
 
   call callTree_leave(trim(mdl)//'()')
