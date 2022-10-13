@@ -224,6 +224,7 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
 !                 "properties, or with BOUSSINSEQ false to convert some "//&
 !                 "parameters from vertical units of m to kg m-2.", &
 !                 units="kg m-3", default=1035.0, scale=US%Z_to_m)
+  if ( method == 0 ) then
 
   slope_pos = edge_pos - flat_shelf_width
   c1 = 0.0 ; if (shelf_slope_scale > 0.0) c1 = 1.0 / shelf_slope_scale
@@ -231,7 +232,7 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
 
   do j=G%jsd,G%jed
 
-  if (((j+j_off) <= jedg) .AND. ((j+j_off) >= nyh+1)) then
+!  if (((j+j_off) <= jedg) .AND. ((j+j_off) >= nyh+1)) then
 
     do i=G%isc,G%iec
 
@@ -264,12 +265,54 @@ subroutine initialize_ice_thickness_channel(h_shelf, area_shelf_h, hmask, G, US,
         endif
       endif
 
-      if ((i+G%idg_offset) == G%domain%nihalo+1) then
-        hmask(i-1,j) = 3.0
+      !if ((i+G%idg_offset) == G%domain%nihalo+1) then
+      !  hmask(i-1,j) = 3.0
+      !endif
+
+    enddo
+  !endif 
+  
+  enddo
+  elseif ( method == 1) then
+  slope_pos = edge_pos - flat_shelf_width
+  c1 = 0.0 ; if (shelf_slope_scale > 0.0) c1 = 1.0 / shelf_slope_scale
+
+  do j=G%jsd,G%jed
+    do i=G%isc,G%iec
+
+      if ((j >= jsc) .and. (j <= jec)) then
+
+        if (G%geoLatCu(i,j-1) >= edge_pos) then
+        ! Everything past the edge is open ocean.
+          area_shelf_h(i,j) = 0.0
+          hmask (i,j) = 0.0
+          h_shelf (i,j) = 0.0
+        else
+          if (G%geoLatCu(i,j) > edge_pos) then !around the front
+            area_shelf_h(i,j) = G%areaT(i,j) * (edge_pos - G%geoLatCu(i-1,j)) / &
+                                (G%geoLatCu(i,j) - G%geoLonCu(i-1,j))
+            hmask (i,j) = 2.0
+          else                                 !Ice shelf
+            area_shelf_h(i,j) = G%areaT(i,j)
+            hmask (i,j) = 1.0
+          endif
+
+          if (G%geoLatT(i,j) > slope_pos) then
+            h_shelf(i,j) = min_draft
+          else
+            h_shelf(i,j) = ( min_draft + &
+               (max_draft - min_draft) * &
+               (c1*abs(slope_pos - G%geoLatT(i,j))) )
+               !min(1.0, (c1*(slope_pos - G%geoLonT(i,j)))**2) ) Pedro
+          endif
+
+        endif
       endif
 
     enddo
-  endif ; enddo
+  enddo
+
+  endif
 
 end subroutine initialize_ice_thickness_channel
 

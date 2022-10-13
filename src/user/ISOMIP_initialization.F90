@@ -60,6 +60,8 @@ subroutine ISOMIP_initialize_topography(D, G, param_file, max_depth, US)
   real :: bx, by          ! dummy vatiables [Z ~> m].
   real :: xtil            ! dummy vatiable
   logical :: is_2D         ! If true, use 2D setup
+  integer :: method       ! dummy variable Pedro
+
 ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "ISOMIP_initialize_topography" ! This subroutine's name.
