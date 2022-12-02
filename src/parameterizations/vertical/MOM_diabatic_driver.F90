@@ -218,7 +218,7 @@ type, public :: diabatic_CS ; private
 
   logical :: diabatic_diff_tendency_diag = .false. !< If true calculate diffusive tendency diagnostics
   logical :: boundary_forcing_tendency_diag = .false. !< If true calculate frazil diagnostics
-  logical :: frazil_tendency_diag = .false. !< If true calculate frazil tendency diagnostics
+  logical :: frazil_tendency_diag = .true. !< If true calculate frazil tendency diagnostics
 
   type(diabatic_aux_CS),        pointer :: diabatic_aux_CSp      => NULL() !< Control structure for a child module
   type(int_tide_input_CS),      pointer :: int_tide_input_CSp    => NULL() !< Control structure for a child module
