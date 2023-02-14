@@ -33,7 +33,7 @@ use MOM_fixed_initialization, only : MOM_initialize_rotation
 use user_initialization, only : user_initialize_topography
 use MOM_io, only : field_exists, file_exists, MOM_read_data, write_version_number
 use MOM_io, only : slasher, fieldtype, vardesc, var_desc
-use MOM_io, only : write_field, close_file, SINGLE_FILE, MULTIPLE
+use MOM_io, only : close_file, SINGLE_FILE, MULTIPLE
 use MOM_restart, only : register_restart_field, save_restart
 use MOM_restart, only : restart_init, restore_state, MOM_restart_CS, register_restart_pair
 use MOM_time_manager, only : time_type, time_type_to_real, real_to_time, operator(>), operator(-)
@@ -220,16 +220,16 @@ contains
 !! formulation (optional to use just two equations).
 !! See \ref section_ICE_SHELF_equations
 subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
-  type(surface), target,         intent(inout) :: sfc_state_in !< A structure containing fields that
-                                                !! describe the surface state of the ocean.  The
-                                                !! intent is only inout to allow for halo updates.
-  type(forcing),  target, intent(inout)        :: fluxes_in !< structure containing pointers to any
-                                                !! possible thermodynamic or mass-flux forcing fields.
-  type(time_type),       intent(in)    :: Time  !< Start time of the fluxes.
-  real,                  intent(in)    :: time_step_in !< Length of time over which these fluxes
-                                                !! will be applied [s].
-  type(ice_shelf_CS),    pointer       :: CS    !< A pointer to the control structure returned
-                                                !! by a previous call to initialize_ice_shelf.
+  type(surface), target,  intent(inout) :: sfc_state_in !< A structure containing fields that
+                                                 !! describe the surface state of the ocean.  The
+                                                 !! intent is only inout to allow for halo updates.
+  type(forcing),  target, intent(inout) :: fluxes_in !< structure containing pointers to any
+                                                 !! possible thermodynamic or mass-flux forcing fields.
+  type(time_type),        intent(in)    :: Time  !< Start time of the fluxes.
+  real,                   intent(in)    :: time_step_in !< Length of time over which these fluxes
+                                                 !! will be applied [T ~> s].
+  type(ice_shelf_CS),     pointer       :: CS    !< A pointer to the control structure returned
+                                                 !! by a previous call to initialize_ice_shelf.
 
   ! Local variables
   type(ocean_grid_type), pointer :: G => NULL()  !< The grid structure used by the ice shelf.
@@ -326,7 +326,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
 
   G => CS%grid ; US => CS%US
   ISS => CS%ISS
-  time_step = US%s_to_T*time_step_in
+  time_step = time_step_in
 
   if (CS%data_override_shelf_fluxes .and. CS%active_shelf_dynamics) then
     call data_override(G%Domain, 'shelf_sfc_mass_flux', fluxes_in%shelf_sfc_mass_flux, CS%Time, &
@@ -1468,7 +1468,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
 
   call get_param(param_file, mdl, "G_EARTH", CS%g_Earth, &
                  "The gravitational acceleration of the Earth.", &
-                 units="m s-2", default = 9.80, scale=US%m_s_to_L_T**2*US%Z_to_m)
+                 units="m s-2", default=9.80, scale=US%m_s_to_L_T**2*US%Z_to_m)
   call get_param(param_file, mdl, "C_P", CS%Cp, &
                  "The heat capacity of sea water, approximated as a constant. "//&
                  "The default value is from the TEOS-10 definition of conservative temperature.", &

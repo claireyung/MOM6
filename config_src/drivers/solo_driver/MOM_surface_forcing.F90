@@ -73,8 +73,8 @@ type, public :: surface_forcing_CS ; private
   logical :: adiabatic          !< if true, no diapycnal mass fluxes or surface buoyancy forcing
   logical :: variable_winds     !< if true, wind stresses vary with time
   logical :: variable_buoyforce !< if true, buoyancy forcing varies with time.
-  real    :: south_lat          !< southern latitude of the domain
-  real    :: len_lat            !< domain length in latitude
+  real    :: south_lat          !< southern latitude of the domain [degrees_N] or [km] or [m]
+  real    :: len_lat            !< domain length in latitude [degrees_N] or [km] or [m]
 
   real :: Rho0                  !< Boussinesq reference density [R ~> kg m-3]
   real :: G_Earth               !< gravitational acceleration [L2 Z-1 T-2 ~> m s-2]
@@ -104,7 +104,7 @@ type, public :: surface_forcing_CS ; private
   real :: gyres_taux_const   !< A constant wind stress [R L Z T-1 ~> Pa].
   real :: gyres_taux_sin_amp !< The amplitude of cosine wind stress gyres [R L Z T-1 ~> Pa], if WIND_CONFIG=='gyres'
   real :: gyres_taux_cos_amp !< The amplitude of cosine wind stress gyres [R L Z T-1 ~> Pa], if WIND_CONFIG=='gyres'
-  real :: gyres_taux_n_pis   !< The number of sine lobes in the basin if WIND_CONFIG=='gyres'
+  real :: gyres_taux_n_pis   !< The number of sine lobes in the basin if WIND_CONFIG=='gyres' [nondim]
   integer :: answer_date     !< This 8-digit integer gives the approximate date with which the order
                              !! of arithmetic and expressions were added to the code.
                              !! Dates before 20190101 use original answers.
@@ -1300,7 +1300,7 @@ subroutine buoyancy_forcing_from_data_override(sfc_state, fluxes, day, dt, G, US
 !#CTRL#     SSS_mean(i,j) = 0.5*(sfc_state%SSS(i,j) + CS%S_Restore(i,j))
 !#CTRL#   enddo ; enddo
 !#CTRL#   call apply_ctrl_forcing(SST_anom, SSS_anom, SSS_mean, fluxes%heat_added, &
-!#CTRL#                           fluxes%vprec, day, US%T_to_s*dt, G, US, CS%ctrl_forcing_CSp)
+!#CTRL#                           fluxes%vprec, day, dt, G, US, CS%ctrl_forcing_CSp)
 !#CTRL# endif
 
   call callTree_leave("buoyancy_forcing_from_data_override")
@@ -1801,9 +1801,8 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
                  "parameters from vertical units of m to kg m-2.", &
                  units="kg m-3", default=1035.0, scale=US%kg_m3_to_R)
   call get_param(param_file, mdl, "RESTOREBUOY", CS%restorebuoy, &
-                 "If true, the buoyancy fluxes drive the model back "//&
-                 "toward some specified surface state with a rate "//&
-                 "given by FLUXCONST.", default= .false.)
+                 "If true, the buoyancy fluxes drive the model back toward some "//&
+                 "specified surface state with a rate given by FLUXCONST.", default=.false.)
   call get_param(param_file, mdl, "LATENT_HEAT_FUSION", CS%latent_heat_fusion, &
                  "The latent heat of fusion.", default=hlf, &
                  units="J/kg", scale=US%J_kg_to_Q)
@@ -1814,22 +1813,19 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
     call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes to the relative "//&
                  "surface anomalies (akin to a piston velocity).  Note the non-MKS units.", &
-                 default=0.0, units="m day-1", scale=US%m_to_Z*US%T_to_s/86400.0, &
-                 unscaled=flux_const_default)
+                 default=0.0, units="m day-1", scale=US%m_to_Z*US%T_to_s/86400.0)
 
     if (CS%use_temperature) then
+      call get_param(param_file, mdl, "FLUXCONST", flux_const_default, &
+                 default=0.0, units="m day-1", do_not_log=.true.)
       call get_param(param_file, mdl, "FLUXCONST_T", CS%Flux_const_T, &
-           "The constant that relates the restoring surface temperature "//&
-           "flux to the relative surface anomaly (akin to a piston "//&
-           "velocity).  Note the non-MKS units.", &
-           units="m day-1", scale=US%m_to_Z*US%T_to_s/86400.0, &
-           default=flux_const_default)
+                 "The constant that relates the restoring surface temperature flux to the "//&
+                 "relative surface anomaly (akin to a piston velocity).  Note the non-MKS units.", &
+                 units="m day-1", scale=US%m_to_Z*US%T_to_s/86400.0, default=flux_const_default)
       call get_param(param_file, mdl, "FLUXCONST_S", CS%Flux_const_S, &
-           "The constant that relates the restoring surface salinity "//&
-           "flux to the relative surface anomaly (akin to a piston "//&
-           "velocity).  Note the non-MKS units.", &
-           units="m day-1", scale=US%m_to_Z*US%T_to_s/86400.0, &
-           default=flux_const_default)
+                 "The constant that relates the restoring surface salinity flux to the "//&
+                 "relative surface anomaly (akin to a piston velocity).  Note the non-MKS units.", &
+                 units="m day-1", scale=US%m_to_Z*US%T_to_s/86400.0, default=flux_const_default)
     endif
 
     if (trim(CS%buoy_config) == "linear") then
@@ -1853,7 +1849,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
   endif
   call get_param(param_file, mdl, "G_EARTH", CS%G_Earth, &
                  "The gravitational acceleration of the Earth.", &
-                 units="m s-2", default = 9.80, scale=US%m_to_L**2*US%Z_to_m*US%T_to_s**2)
+                 units="m s-2", default=9.80, scale=US%m_to_L**2*US%Z_to_m*US%T_to_s**2)
 
   call get_param(param_file, mdl, "GUST_CONST", CS%gust_const, &
                  "The background gustiness in the winds.", &
