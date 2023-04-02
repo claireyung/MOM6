@@ -256,8 +256,8 @@ type, public :: vertvisc_type
   real, allocatable, dimension(:,:) :: nkml_visc_v
                 !< The number of layers in the viscous surface mixed layer at v-points [nondim].
   real, allocatable, dimension(:,:,:) :: &
-    Ray_u, &    !< The Rayleigh drag velocity to be applied to each layer at u-points [Z T-1 ~> m s-1].
-    Ray_v       !< The Rayleigh drag velocity to be applied to each layer at v-points [Z T-1 ~> m s-1].
+    Ray_u, &    !< The Rayleigh drag velocity to be applied to each layer at u-points [H T-1 ~> m s-1 or Pa s m-1].
+    Ray_v       !< The Rayleigh drag velocity to be applied to each layer at v-points [H T-1 ~> m s-1 or Pa s m-1].
 
   ! The following elements are pointers so they can be used as targets for pointers in the restart registry.
   real, pointer, dimension(:,:) :: &

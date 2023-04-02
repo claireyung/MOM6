@@ -193,6 +193,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
                            ! factor from lateral lengths to vertical depths [Z L-1 ~> nondim].
   real :: cdrag_sqrt_H     ! Square root of the drag coefficient, times a unit conversion factor
                            ! from thicknesses to vertical depths [Z H-1 ~> nondim or m3 kg-1]
+  real :: cdrag_L_to_H     ! The drag coeffient times conversion factors from lateral
+                           ! distance to thickness units [H L-1 ~> nondim or kg m-3]
   real :: oldfn            ! The integrated energy required to
                            ! entrain up to the bottom of the layer,
                            ! divided by G_Earth [H R ~> kg m-2 or kg2 m-5].
@@ -272,9 +274,9 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   real :: root             ! A temporary variable [H T-1 ~> m s-1 or kg m-2 s-1].
 
   real :: Cell_width       ! The transverse width of the velocity cell [L ~> m].
-  real :: Rayleigh         ! A nondimensional value that is multiplied by the layer's
-                           ! velocity magnitude to give the Rayleigh drag velocity, times
-                           ! a lateral to vertical distance conversion factor [Z L-1 ~> nondim].
+  real :: Rayleigh         ! A factor that is multiplied by the layer's velocity magnitude
+                           ! to give the Rayleigh drag velocity, times a lateral distance to
+                           ! thickness conversion factor [H L-1 ~> nondim or kg m-3].
   real :: gam              ! The ratio of the change in the open interface width
                            ! to the open interface width atop a cell [nondim].
   real :: BBL_frac         ! The fraction of a layer's drag that goes into the
@@ -324,7 +326,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   cdrag_sqrt = sqrt(CS%cdrag)
   cdrag_sqrt_Z = US%L_to_Z * cdrag_sqrt
   cdrag_sqrt_H = GV%H_to_Z * cdrag_sqrt
-  BBL_thick_max = G%Rad_Earth_L * US%L_to_Z * GV%H_to_Z
+  cdrag_L_to_H = CS%cdrag * US%L_to_Z * GV%Z_to_H
+  BBL_thick_max = G%Rad_Earth_L * US%L_to_Z * GV%Z_to_H
   K2 = max(nkmb+1, 2)
 
 !  With a linear drag law, the friction velocity is already known.
@@ -958,9 +961,9 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
             if (m==1) then ; Cell_width = G%dy_Cu(I,j)*pbv%por_face_areaU(I,j,k)
             else ; Cell_width = G%dx_Cv(i,J)*pbv%por_face_areaV(i,J,k) ; endif
             gam = 1.0 - L(K+1)/L(K)
-            Rayleigh = US%L_to_Z * CS%cdrag * (L(K)-L(K+1)) * (1.0-BBL_frac) * &
+            Rayleigh = cdrag_L_to_H * (L(K)-L(K+1)) * (1.0-BBL_frac) * &
                 (12.0*CS%c_Smag*h_vel_pos) /  (12.0*CS%c_Smag*h_vel_pos + &
-                 US%L_to_Z*GV%Z_to_H * CS%cdrag * gam*(1.0-gam)*(1.0-1.5*gam) * L(K)**2 * Cell_width)
+                 cdrag_L_to_H * gam*(1.0-gam)*(1.0-1.5*gam) * L(K)**2 * Cell_width)
           else ! This layer feels no drag.
             Rayleigh = 0.0
           endif
@@ -1036,9 +1039,9 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
         do k=nz,1,-1
           h_bbl_fr = min(h_bbl_drag(i) - h_sum, h_at_vel(i,k)) * I_hwtot
           if (m==1) then
-            visc%Ray_u(I,j,k) = visc%Ray_u(I,j,k) + (CS%cdrag*US%L_to_Z*umag_avg(I)) * h_bbl_fr
+            visc%Ray_u(I,j,k) = visc%Ray_u(I,j,k) + (cdrag_L_to_H * umag_avg(I)) * h_bbl_fr
           else
-            visc%Ray_v(i,J,k) = visc%Ray_v(i,J,k) + (CS%cdrag*US%L_to_Z*umag_avg(i)) * h_bbl_fr
+            visc%Ray_v(i,J,k) = visc%Ray_v(i,J,k) + (cdrag_L_to_H * umag_avg(i)) * h_bbl_fr
           endif
           h_sum = h_sum + h_at_vel(i,k)
           if (h_sum >= h_bbl_drag(i)) exit ! The top of this layer is above the drag zone.
@@ -1078,7 +1081,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
 
   if (CS%debug) then
     if (allocated(visc%Ray_u) .and. allocated(visc%Ray_v)) &
-        call uvchksum("Ray [uv]", visc%Ray_u, visc%Ray_v, G%HI, haloshift=0, scale=US%Z_to_m*US%s_to_T)
+        call uvchksum("Ray [uv]", visc%Ray_u, visc%Ray_v, G%HI, haloshift=0, scale=GV%H_to_m*US%s_to_T)
     if (allocated(visc%kv_bbl_u) .and. allocated(visc%kv_bbl_v)) &
         call uvchksum("kv_bbl_[uv]", visc%kv_bbl_u, visc%kv_bbl_v, G%HI, &
                       haloshift=0, scale=US%Z2_T_to_m2_s, scalar_pair=.true.)
@@ -2297,9 +2300,9 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
     allocate(visc%Ray_u(IsdB:IedB,jsd:jed,nz), source=0.0)
     allocate(visc%Ray_v(isd:ied,JsdB:JedB,nz), source=0.0)
     CS%id_Ray_u = register_diag_field('ocean_model', 'Rayleigh_u', diag%axesCuL, &
-       Time, 'Rayleigh drag velocity at u points', 'm s-1', conversion=US%Z_to_m*US%s_to_T)
+       Time, 'Rayleigh drag velocity at u points', 'm s-1', conversion=GV%H_to_m*US%s_to_T)
     CS%id_Ray_v = register_diag_field('ocean_model', 'Rayleigh_v', diag%axesCvL, &
-       Time, 'Rayleigh drag velocity at v points', 'm s-1', conversion=US%Z_to_m*US%s_to_T)
+       Time, 'Rayleigh drag velocity at v points', 'm s-1', conversion=GV%H_to_m*US%s_to_T)
   endif
 
 
