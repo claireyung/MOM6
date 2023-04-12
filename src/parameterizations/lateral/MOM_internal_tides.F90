@@ -76,7 +76,7 @@ type, public :: int_tide_CS ; private
   real, allocatable, dimension(:,:,:,:,:) :: TKE_Froude_loss
                         !< energy lost due to wave breaking [R Z3 T-3 ~> W m-2]
   real, allocatable, dimension(:,:) :: TKE_itidal_loss_fixed
-                        !< Fixed part of the energy lost due to small-scale drag [R L-2 Z3 ~> kg m-2] here;
+                        !< Fixed part of the energy lost due to small-scale drag [R Z3 L-2 ~> kg m-2] here;
                         !! This will be multiplied by N and the squared near-bottom velocity to get
                         !! the energy losses in [R Z3 T-3 ~> W m-2]
   real, allocatable, dimension(:,:,:,:,:) :: TKE_itidal_loss
@@ -695,7 +695,7 @@ subroutine itidal_lowmode_loss(G, US, CS, Nb, Ub, En, TKE_loss_fixed, TKE_loss, 
                              intent(inout) :: Ub !< RMS (over one period) near-bottom horizontal
                                                  !! mode velocity [L T-1 ~> m s-1].
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                             intent(in) :: TKE_loss_fixed !< Fixed part of energy loss [R L-2 Z3 ~> kg m-2]
+                             intent(in) :: TKE_loss_fixed !< Fixed part of energy loss [R Z3 L-2 ~> kg m-2]
                                                  !! (rho*kappa*h^2).
   real, dimension(G%isd:G%ied,G%jsd:G%jed,CS%NAngle,CS%nFreq,CS%nMode), &
                              intent(inout) :: En !< Energy density of the internal waves [R Z3 T-2 ~> J m-2].
@@ -2428,7 +2428,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     else
       h2(i,j) = max(h2(i,j), 0.0)
     endif
-    ! Compute the fixed part; units are [R L-2 Z3 ~> kg m-2] here
+    ! Compute the fixed part; units are [R Z3 L-2 ~> kg m-2] here
     ! will be multiplied by N and the squared near-bottom velocity to get into [R Z3 T-3 ~> W m-2]
     CS%TKE_itidal_loss_fixed(i,j) = 0.5*kappa_h2_factor*GV%Rho0 * US%L_to_Z*kappa_itides * h2(i,j)
   enddo ; enddo
