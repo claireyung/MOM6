@@ -53,7 +53,7 @@ type, public :: bulkmixedlayer_CS ; private
   real    :: Hmix_min        !< The minimum mixed layer thickness [H ~> m or kg m-2].
   real    :: mech_TKE_floor  !< A tiny floor on the amount of turbulent kinetic energy that is
                              !! used when the mixed layer does not yet contain HMIX_MIN fluid
-                             !! [Z L2 T-2 ~> m3 s-2].  The default is so small that its actual
+                             !! [H L2 T-2 ~> m3 s-2 or J m-2].  The default is so small that its actual
                              !! value is irrelevant, but it is detectably greater than 0.
   real    :: H_limit_fluxes  !< When the total ocean depth is less than this
                              !! value [H ~> m or kg m-2], scale away all surface forcing to
@@ -102,7 +102,7 @@ type, public :: bulkmixedlayer_CS ; private
   logical :: TKE_diagnostics = .false. !< If true, calculate extensive diagnostics of the TKE budget
   logical :: do_rivermix = .false. !< Provide additional TKE to mix river runoff
                              !! at the river mouths to rivermix_depth
-  real    :: rivermix_depth = 0.0  !< The depth of mixing if do_rivermix is true [Z ~> m].
+  real    :: rivermix_depth = 0.0  !< The depth of mixing if do_rivermix is true [H ~> m or kg m-2].
   logical :: limit_det       !< If true, limit the extent of buffer layer
                              !! detrainment to be consistent with neighbors.
   real    :: lim_det_dH_sfc  !< The fractional limit in the change between grid
@@ -125,17 +125,17 @@ type, public :: bulkmixedlayer_CS ; private
   real    :: Allowed_S_chg   !< The amount by which salinity is allowed
                              !! to exceed previous values during detrainment [S ~> ppt]
 
-  ! These are terms in the mixed layer TKE budget, all in [Z L2 T-3 ~> m3 s-3] except as noted.
+  ! These are terms in the mixed layer TKE budget, all in [H L2 T-3 ~> m3 s-3 or W m-2] except as noted.
   real, allocatable, dimension(:,:) :: &
     ML_depth, &        !< The mixed layer depth [H ~> m or kg m-2].
-    diag_TKE_wind, &   !< The wind source of TKE [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_RiBulk, & !< The resolved KE source of TKE [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_conv, &   !< The convective source of TKE [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_pen_SW, & !< The TKE sink required to mix penetrating shortwave heating [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_mech_decay, & !< The decay of mechanical TKE [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_conv_decay, & !< The decay of convective TKE [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_mixing, & !< The work done by TKE to deepen the mixed layer [Z L2 T-3 ~> m3 s-3].
-    diag_TKE_conv_s2, & !< The convective source of TKE due to to mixing in sigma2 [Z L2 T-3 ~> m3 s-3].
+    diag_TKE_wind, &   !< The wind source of TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_RiBulk, & !< The resolved KE source of TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_conv, &   !< The convective source of TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_pen_SW, & !< The TKE sink required to mix penetrating shortwave heating [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_mech_decay, & !< The decay of mechanical TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_conv_decay, & !< The decay of convective TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_mixing, & !< The work done by TKE to deepen the mixed layer [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_conv_s2, & !< The convective source of TKE due to to mixing in sigma2 [Z L2 T-3 ~> m3 s-3 or W m-2].
     diag_PE_detrain, & !< The spurious source of potential energy due to mixed layer
                        !! detrainment [R Z L2 T-3 ~> W m-2].
     diag_PE_detrain2   !< The spurious source of potential energy due to mixed layer only
@@ -237,9 +237,9 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     h_miss      !   The summed absolute mismatch [H ~> m or kg m-2].
   real, dimension(SZI_(G)) :: &
     TKE, &      !   The turbulent kinetic energy available for mixing over a
-                ! time step [Z L2 T-2 ~> m3 s-2].
+                ! time step [H L2 T-2 ~> m3 s-2 or J m-2].
     Conv_En, &  !   The turbulent kinetic energy source due to mixing down to
-                ! the depth of free convection [Z L2 T-2 ~> m3 s-2].
+                ! the depth of free convection [H L2 T-2 ~> m3 s-2 or J m-2].
     htot, &     !   The total depth of the layers being considered for
                 ! entrainment [H ~> m or kg m-2].
     R0_tot, &   !   The integrated potential density referenced to the surface
@@ -275,7 +275,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     dRcv_dS, &  !   Partial derivative of the coordinate variable potential
                 ! density in the mixed layer with salinity [R S-1 ~> kg m-3 ppt-1].
     TKE_river   ! The source of turbulent kinetic energy available for mixing
-                ! at rivermouths [Z L2 T-3 ~> m3 s-3].
+                ! at rivermouths [H L2 T-3 ~> m3 s-3 or W m-2].
 
   real, dimension(max(CS%nsw,1),SZI_(G)) :: &
     Pen_SW_bnd  !   The penetrating fraction of the shortwave heating integrated
@@ -291,16 +291,16 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   real :: Ih            !   The inverse of a thickness [H-1 ~> m-1 or m2 kg-1].
   real :: Idt_diag      !   The inverse of the timestep used for diagnostics [T-1 ~> s-1].
   real :: RmixConst     ! A combination of constants used in the river mixing energy
-                        ! calculation [L2 T-2 R-2 ~> m8 s-2 kg-2]
+                        ! calculation [H L2 Z-1 T-2 R-2 ~> m8 s-2 kg-2 or m5 s-2 kg-1]
   real, dimension(SZI_(G)) :: &
     dKE_FC, &   !   The change in mean kinetic energy due to free convection
-                ! [Z L2 T-2 ~> m3 s-2].
+                ! [H L2 T-2 ~> m3 s-2 or J m-2].
     h_CA        !   The depth to which convective adjustment has gone [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZK_(GV)) :: &
     dKE_CA, &   !   The change in mean kinetic energy due to convective
-                ! adjustment [Z L2 T-2 ~> m3 s-2].
+                ! adjustment [H L2 T-2 ~> m3 s-2 or J m-2].
     cTKE        !   The turbulent kinetic energy source due to convective
-                ! adjustment [Z L2 T-2 ~> m3 s-2].
+                ! adjustment [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G),SZJ_(G)) :: &
     Hsfc_max, & ! The thickness of the surface region (mixed and buffer layers)
                 ! after entrainment but before any buffer layer detrainment [H ~> m or kg m-2].
@@ -472,7 +472,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! Here we add an additional source of TKE to the mixed layer where river
       ! is present to simulate unresolved estuaries. The TKE input is diagnosed
       ! as follows:
-      !   TKE_river[Z L2 T-3 ~> m3 s-3] = 0.5*rivermix_depth * g * Irho0**2 * drho_ds *
+      !   TKE_river[H L2 T-3 ~> m3 s-3] = 0.5*rivermix_depth * g * Irho0**2 * drho_ds *
       !                       River*(Samb - Sriver) = CS%mstar*U_star^3
       ! where River is in units of [R Z T-1 ~> kg m-2 s-1].
       ! Samb = Ambient salinity at the mouth of the estuary
@@ -774,10 +774,10 @@ subroutine convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, &
                                                            !! a layer.
   real, dimension(SZI_(G),SZK_(GV)),  intent(out)   :: dKE_CA !< The vertically integrated change in
                                                            !! kinetic energy due to convective
-                                                           !! adjustment [Z L2 T-2 ~> m3 s-2].
+                                                           !! adjustment [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G),SZK_(GV)),  intent(out)   :: cTKE !< The buoyant turbulent kinetic energy
                                                            !! source due to convective adjustment
-                                                           !! [Z L2 T-2 ~> m3 s-2].
+                                                           !! [H L2 T-2 ~> m3 s-2 or J m-2].
   integer,                            intent(in)    :: j   !< The j-index to work on.
   type(unit_scale_type),              intent(in)    :: US  !< A dimensional unit scaling type
   type(bulkmixedlayer_CS),            intent(in)    :: CS  !< Bulk mixed layer control structure
@@ -802,13 +802,13 @@ subroutine convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, &
     h_orig_k1   !   The depth of layer k1 before convective adjustment [H ~> m or kg m-2].
   real :: h_ent !   The thickness from a layer that is entrained [H ~> m or kg m-2].
   real :: Ih    !   The inverse of a thickness [H-1 ~> m-1 or m2 kg-1].
-  real :: g_H2_2Rho0  !   Half the gravitational acceleration times the square of
+  real :: g_H2_2Rho0  !   Half the gravitational acceleration times
                       ! the conversion from H to Z divided by the mean density,
                       ! in [L2 Z T-2 H-2 R-1 ~> m4 s-2 kg-1 or m10 s-2 kg-3].
   integer :: is, ie, nz, i, k, k1, nzc, nkmb
 
   is = G%isc ; ie = G%iec ; nz = GV%ke
-  g_H2_2Rho0 = (GV%g_Earth * GV%H_to_Z**2) / (2.0 * GV%Rho0)
+  g_H2_2Rho0 = (GV%g_Earth * GV%H_to_Z) / (2.0 * GV%Rho0)
   nzc = nz ; if (present(nz_conv)) nzc = nz_conv
   nkmb = CS%nkml+CS%nkbl
 
@@ -858,8 +858,8 @@ subroutine convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, &
       Ih = 1.0 / h(i,k1)
       R0(i,k1) = R0_tot(i) * Ih
       u(i,k1) = uhtot(i) * Ih ; v(i,k1) = vhtot(i) * Ih
-      dKE_CA(i,k1) = dKE_CA(i,k1) + GV%H_to_Z * (CS%bulk_Ri_convective * &
-           (KE_orig(i) - 0.5*h(i,k1)*(u(i,k1)**2 + v(i,k1)**2)))
+      dKE_CA(i,k1) = dKE_CA(i,k1) + CS%bulk_Ri_convective * &
+           (KE_orig(i) - 0.5*h(i,k1)*(u(i,k1)**2 + v(i,k1)**2))
       Rcv(i,k1) = Rcv_tot(i) * Ih
       T(i,k1) = Ttot(i) * Ih ; S(i,k1) = Stot(i) * Ih
     endif ; enddo
@@ -948,9 +948,9 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
   real, dimension(max(nsw,1),SZI_(G),SZK_(GV)), intent(in) :: opacity_band !< The opacity in each band of
                                                    !! penetrating shortwave radiation [H-1 ~> m-1 or m2 kg-1].
   real, dimension(SZI_(G)), intent(out)   :: Conv_En !< The buoyant turbulent kinetic energy source
-                                                   !! due to free convection [Z L2 T-2 ~> m3 s-2].
+                                                   !! due to free convection [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G)), intent(out)   :: dKE_FC !< The vertically integrated change in kinetic
-                                                   !! energy due to free convection [Z L2 T-2 ~> m3 s-2].
+                                                   !! energy due to free convection [H L2 T-2 ~> m3 s-2 or J m-2].
   integer,                  intent(in)    :: j     !< The j-index to work on.
   integer, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: ksort !< The density-sorted k-indices.
@@ -994,9 +994,9 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
   real :: h_evap       !   The thickness that is evaporated [H ~> m or kg m-2].
   real :: dh_Newt      !   The Newton's method estimate of the change in
                        ! h_ent between iterations [H ~> m or kg m-2].
-  real :: g_H2_2Rho0   !   Half the gravitational acceleration times the square of
+  real :: g_H2_2Rho0   !   Half the gravitational acceleration times
                        ! the conversion from H to Z divided by the mean density,
-                       ! [L2 Z T-2 H-2 R-1 ~> m4 s-2 kg-1 or m10 s-2 kg-3].
+                       ! [L2 T-2 H-1 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2].
   real :: Angstrom     !   The minimum layer thickness [H ~> m or kg m-2].
   real :: opacity      !   The opacity converted to inverse thickness units [H-1 ~> m-1 or m2 kg-1]
   real :: sum_Pen_En   !   The potential energy change due to penetrating
@@ -1010,7 +1010,7 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
 
   Angstrom = GV%Angstrom_H
   C1_3 = 1.0/3.0 ; C1_6 = 1.0/6.0
-  g_H2_2Rho0 = (GV%g_Earth * GV%H_to_Z**2) / (2.0 * GV%Rho0)
+  g_H2_2Rho0 = (GV%g_Earth * GV%H_to_Z) / (2.0 * GV%Rho0)
   Idt = 1.0 / dt
   is = G%isc ; ie = G%iec ; nz = GV%ke
 
@@ -1230,7 +1230,7 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
         if (h_ent > 0.0) then
           if (htot(i) > 0.0) &
             dKE_FC(i) = dKE_FC(i) + CS%bulk_Ri_convective * 0.5 * &
-              ((GV%H_to_Z*h_ent) / (htot(i)*(h_ent+htot(i)))) * &
+              ((h_ent) / (htot(i)*(h_ent+htot(i)))) * &
               ((uhtot(i)-u(i,k)*htot(i))**2 + (vhtot(i)-v(i,k)*htot(i))**2)
 
           htot(i)  = htot(i)  + h_ent
@@ -1266,25 +1266,25 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
                                                        !! possible forcing fields.  Unused fields
                                                        !! have NULL pointers.
   real, dimension(SZI_(G)),   intent(inout) :: Conv_En !< The buoyant turbulent kinetic energy source
-                                                       !! due to free convection [Z L2 T-2 ~> m3 s-2].
+                                                       !! due to free convection [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G)),   intent(in)    :: dKE_FC  !< The vertically integrated change in
                                                        !! kinetic energy due to free convection
-                                                       !! [Z L2 T-2 ~> m3 s-2].
+                                                       !! [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G),SZK_(GV)), &
                               intent(in)    :: cTKE    !< The buoyant turbulent kinetic energy
                                                        !! source due to convective adjustment
-                                                       !! [Z L2 T-2 ~> m3 s-2].
+                                                       !! [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G),SZK_(GV)), &
                               intent(in)    :: dKE_CA  !< The vertically integrated change in
                                                        !! kinetic energy due to convective
-                                                       !! adjustment [Z L2 T-2 ~> m3 s-2].
+                                                       !! adjustment [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G)),   intent(out)   :: TKE     !< The turbulent kinetic energy available for
-                                                       !! mixing over a time step [Z L2 T-2 ~> m3 s-2].
+                                                       !! mixing over a time step [H L2 T-2 ~> m3 s-2 or J m-2]
   real, dimension(SZI_(G)),   intent(out)   :: Idecay_len_TKE !< The inverse of the vertical decay
                                                        !! scale for TKE [H-1 ~> m-1 or m2 kg-1].
   real, dimension(SZI_(G)),   intent(in)    :: TKE_river !< The source of turbulent kinetic energy
                                                        !! available for driving mixing at river mouths
-                                                       !! [Z L2 T-3 ~> m3 s-3].
+                                                       !! [H L2 T-3 ~> m3 s-3 or W m-2].
   real, dimension(2,SZI_(G)), intent(out)   :: cMKE    !< Coefficients of HpE and HpE^2 in
                                                        !! calculating the denominator of MKE_rate,
                                                        !! [H-1 ~> m-1 or m2 kg-1] and [H-2 ~> m-2 or m4 kg-2].
@@ -1300,22 +1300,22 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
 ! convection to drive mechanical entrainment.
 
   ! Local variables
-  real :: dKE_conv  ! The change in mean kinetic energy due to all convection [Z L2 T-2 ~> m3 s-2].
+  real :: dKE_conv  ! The change in mean kinetic energy due to all convection [H L2 T-2 ~> m3 s-2 or J m-2].
   real :: nstar_FC  ! The effective efficiency with which the energy released by
                     ! free convection is converted to TKE, often ~0.2 [nondim].
   real :: nstar_CA  ! The effective efficiency with which the energy released by
                     ! convective adjustment is converted to TKE, often ~0.2 [nondim].
   real :: TKE_CA    ! The potential energy released by convective adjustment if
-                    ! that release is positive [Z L2 T-2 ~> m3 s-2].
+                    ! that release is positive [H L2 T-2 ~> m3 s-2 or J m-2].
   real :: MKE_rate_CA ! MKE_rate for convective adjustment [nondim], 0 to 1.
   real :: MKE_rate_FC ! MKE_rate for free convection [nondim], 0 to 1.
-  real :: totEn_Z   ! The total potential energy released by convection, [Z3 T-2 ~> m3 s-2].
+  real :: totEn_Z   ! The total potential energy released by convection, [H Z2 T-2 ~> m3 s-2 or J m-2].
   real :: Ih        ! The inverse of a thickness [H-1 ~> m-1 or m2 kg-1].
   real :: exp_kh    ! The nondimensional decay of TKE across a layer [nondim].
   real :: absf      ! The absolute value of f averaged to thickness points [T-1 ~> s-1].
   real :: U_star    ! The friction velocity [Z T-1 ~> m s-1].
   real :: absf_Ustar  ! The absolute value of f divided by U_star [Z-1 ~> m-1].
-  real :: wind_TKE_src ! The surface wind source of TKE [Z L2 T-3 ~> m3 s-3].
+  real :: wind_TKE_src ! The surface wind source of TKE [H L2 T-3 ~> m3 s-3 or W m-2].
   real :: diag_wt   ! The ratio of the current timestep to the diagnostic
                     ! timestep (which may include 2 calls) [nondim].
   integer :: is, ie, nz, i
@@ -1371,7 +1371,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
 
       if (totEn_Z > 0.0) then
         nstar_FC = CS%nstar * totEn_Z / (totEn_Z + 0.2 * &
-                        sqrt(0.5 * dt * (absf*(htot(i)*GV%H_to_Z))**3 * totEn_Z))
+                        sqrt(0.5 * dt * (GV%H_to_Z**2*(absf*htot(i))**3) * totEn_Z))
       else
         nstar_FC = CS%nstar
       endif
@@ -1381,7 +1381,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
       if (Conv_En(i) > 0.0) then
         totEn_Z = US%L_to_Z**2 * (Conv_En(i) + TKE_CA * (htot(i) / h_CA(i)) )
         nstar_FC = CS%nstar * totEn_Z / (totEn_Z + 0.2 * &
-                        sqrt(0.5 * dt * (absf*(htot(i)*GV%H_to_Z))**3 * totEn_Z))
+                        sqrt(0.5 * dt * (GV%H_to_Z**2*(absf*htot(i))**3) * totEn_Z))
       else
         nstar_FC = CS%nstar
       endif
@@ -1389,7 +1389,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
       totEn_Z = US%L_to_Z**2 * (Conv_En(i) + TKE_CA)
       if (TKE_CA > 0.0) then
         nstar_CA = CS%nstar * totEn_Z / (totEn_Z + 0.2 * &
-                        sqrt(0.5 * dt * (absf*(h_CA(i)*GV%H_to_Z))**3 * totEn_Z))
+                        sqrt(0.5 * dt * (GV%H_to_Z**2*(absf*h_CA(i))**3) * totEn_Z))
       else
         nstar_CA = CS%nstar
       endif
@@ -1411,7 +1411,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
     dKE_conv = dKE_CA(i,1) * MKE_rate_CA + dKE_FC(i) * MKE_rate_FC
 ! At this point, it is assumed that cTKE is positive and stored in TKE_CA!
 ! Note: Removed factor of 2 in u*^3 terms.
-    TKE(i) = (dt*CS%mstar)*((US%Z_to_L**2*(U_star*U_Star*U_Star))*exp_kh) + &
+    TKE(i) = (dt*CS%mstar)*((GV%Z_to_H*US%Z_to_L**2*(U_star*U_Star*U_Star))*exp_kh) + &
              (exp_kh * dKE_conv + nstar_FC*Conv_En(i) + nstar_CA * TKE_CA)
 
     if (CS%do_rivermix) then ! Add additional TKE at river mouths
@@ -1419,7 +1419,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
     endif
 
     if (CS%TKE_diagnostics) then
-      wind_TKE_src = CS%mstar*(US%Z_to_L**2*U_star*U_Star*U_Star) * diag_wt
+      wind_TKE_src = CS%mstar*(GV%Z_to_H*US%Z_to_L**2*U_star*U_Star*U_Star) * diag_wt
       CS%diag_TKE_wind(i,j) = CS%diag_TKE_wind(i,j) + &
           ( wind_TKE_src + TKE_river(i) * diag_wt )
       CS%diag_TKE_RiBulk(i,j) = CS%diag_TKE_RiBulk(i,j) + dKE_conv*Idt_diag
@@ -1499,7 +1499,7 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
                                                    !! penetrating shortwave radiation [H-1 ~> m-1 or m2 kg-1].
   real, dimension(SZI_(G)), intent(inout) :: TKE   !< The turbulent kinetic energy
                                                    !! available for mixing over a time
-                                                   !! step [Z L2 T-2 ~> m3 s-2].
+                                                   !! step [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G)), intent(inout) :: Idecay_len_TKE !< The vertical TKE decay rate [H-1 ~> m-1 or m2 kg-1].
   integer,                  intent(in)    :: j     !< The j-index to work on.
   integer, dimension(SZI_(G),SZK_(GV)), &
@@ -1526,18 +1526,18 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
                       ! conversion from H to m divided by the mean density,
                       ! in [L2 T-2 H-1 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2].
   real :: TKE_full_ent  ! The TKE remaining if a layer is fully entrained
-                        ! [Z L2 T-2 ~> m3 s-2].
+                        ! [H L2 T-2 ~> m3 s-2 or J m-2].
   real :: dRL       ! Work required to mix water from the next layer
                     ! across the mixed layer [L2 T-2 ~> m2 s-2].
   real :: Pen_En_Contrib  ! Penetrating SW contributions to the changes in
                           ! TKE, divided by layer thickness in m [L2 T-2 ~> m2 s-2].
   real :: Cpen1     ! A temporary variable [L2 T-2 ~> m2 s-2].
   real :: dMKE      ! A temporary variable related to the release of mean
-                    ! kinetic energy [H Z L2 T-2 ~> m4 s-2 or kg m s-2]
-  real :: TKE_ent   ! The TKE that remains if h_ent were entrained [Z L2 T-2 ~> m3 s-2].
+                    ! kinetic energy [H2 L2 T-2 ~> m4 s-2 or kg2 m-2 s-2]
+  real :: TKE_ent   ! The TKE that remains if h_ent were entrained [H L2 T-2 ~> m3 s-2 or J m-2]
   real :: TKE_ent1  ! The TKE that would remain, without considering the
-                    ! release of mean kinetic energy [Z L2 T-2 ~> m3 s-2].
-  real :: dTKE_dh   ! The partial derivative of TKE with h_ent [Z L2 T-2 H-1 ~> m2 s-2 or m5 s-2 kg-1].
+                    ! release of mean kinetic energy [H L2 T-2 ~> m3 s-2 or J m-2]
+  real :: dTKE_dh   ! The partial derivative of TKE with h_ent [L2 T-2 ~> m2 s-2]
   real :: Pen_dTKE_dh_Contrib ! The penetrating shortwave contribution to
                     ! dTKE_dh [L2 T-2 ~> m2 s-2].
   real :: EF4_val   ! The result of EF4() (see later) [H-1 ~> m-1 or m2 kg-1].
@@ -1571,7 +1571,7 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
       h_avail = h(i,k) - eps(i,k)
       if ((h_avail > 0.) .and. ((TKE(i) > 0.) .or. (htot(i) < Hmix_min))) then
         dRL = g_H_2Rho0 * (R0(i,k)*htot(i) - R0_tot(i) )
-        dMKE = (GV%H_to_Z * CS%bulk_Ri_ML) * 0.5 * &
+        dMKE = CS%bulk_Ri_ML * 0.5 * &
             ((uhtot(i)-u(i,k)*htot(i))**2 + (vhtot(i)-v(i,k)*htot(i))**2)
 
 ! Find the TKE that would remain if the entire layer were entrained.
@@ -1617,7 +1617,7 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
         HpE = htot(i)+h_avail
         MKE_rate = 1.0/(1.0 + (cMKE(1,i)*HpE + cMKE(2,i)*HpE**2))
         EF4_val = EF4(htot(i)+h_neglect,h_avail,Idecay_len_TKE(i))
-        TKE_full_ent = (exp_kh*TKE(i) - (h_avail*GV%H_to_Z)*(dRL*f1_kh + Pen_En_Contrib)) + &
+        TKE_full_ent = (exp_kh*TKE(i) - h_avail*(dRL*f1_kh + Pen_En_Contrib)) + &
             MKE_rate*dMKE*EF4_val
         if ((TKE_full_ent >= 0.0) .or. (h_avail+htot(i) <= Hmix_min)) then
           ! The layer will be fully entrained.
@@ -1626,12 +1626,11 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
           if (CS%TKE_diagnostics) then
             E_HxHpE = h_ent / ((htot(i)+h_neglect)*(htot(i)+h_ent+h_neglect))
             CS%diag_TKE_mech_decay(i,j) = CS%diag_TKE_mech_decay(i,j) + &
-                Idt_diag * ((exp_kh-1.0)* TKE(i) + (h_ent*GV%H_to_Z)*dRL*(1.0-f1_kh) + &
+                Idt_diag * ((exp_kh-1.0)* TKE(i) + h_ent*dRL*(1.0-f1_kh) + &
                             MKE_rate*dMKE*(EF4_val-E_HxHpE))
-            CS%diag_TKE_mixing(i,j) = CS%diag_TKE_mixing(i,j) - &
-                Idt_diag*(GV%H_to_Z*h_ent)*dRL
+            CS%diag_TKE_mixing(i,j) = CS%diag_TKE_mixing(i,j) - Idt_diag*h_ent*dRL
             CS%diag_TKE_pen_SW(i,j) = CS%diag_TKE_pen_SW(i,j) - &
-                Idt_diag*(GV%H_to_Z*h_ent)*Pen_En_Contrib
+                Idt_diag*h_ent*Pen_En_Contrib
             CS%diag_TKE_RiBulk(i,j) = CS%diag_TKE_RiBulk(i,j) + &
                 Idt_diag*MKE_rate*dMKE*E_HxHpE
           endif
@@ -1697,15 +1696,15 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
                            Cpen1*((1.0-SW_trans) - opacity*(htot(i) + h_ent)*SW_trans)
               endif ; enddo ! (Pen_SW_bnd(n,i) > 0.0)
 
-              TKE_ent1 = exp_kh* TKE(i) - (h_ent*GV%H_to_Z)*(dRL*f1_kh + Pen_En_Contrib)
+              TKE_ent1 = exp_kh* TKE(i) - h_ent*(dRL*f1_kh + Pen_En_Contrib)
               EF4_val = EF4(htot(i)+h_neglect,h_ent,Idecay_len_TKE(i),dEF4_dh)
               HpE = htot(i)+h_ent
               MKE_rate = 1.0/(1.0 + (cMKE(1,i)*HpE + cMKE(2,i)*HpE**2))
               TKE_ent = TKE_ent1 + dMKE*EF4_val*MKE_rate
               ! TKE_ent is the TKE that would remain if h_ent were entrained.
 
-              dTKE_dh = ((-Idecay_len_TKE(i)*TKE_ent1 - dRL*GV%H_to_Z) + &
-                         Pen_dTKE_dh_Contrib*GV%H_to_Z) + dMKE * MKE_rate* &
+              dTKE_dh = ((-Idecay_len_TKE(i)*TKE_ent1 - dRL) + &
+                         Pen_dTKE_dh_Contrib) + dMKE * MKE_rate* &
                         (dEF4_dh - EF4_val*MKE_rate*(cMKE(1,i)+2.0*cMKE(2,i)*HpE))
               !  dh_Newt = -TKE_ent / dTKE_dh
               ! Bisect if the Newton's method prediction is outside of the bounded range.
@@ -1739,14 +1738,11 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
 
             E_HxHpE = h_ent / ((htot(i)+h_neglect)*(HpE+h_neglect))
             CS%diag_TKE_mech_decay(i,j) = CS%diag_TKE_mech_decay(i,j) + &
-                Idt_diag * ((exp_kh-1.0)* TKE(i) + (h_ent*GV%H_to_Z)*dRL*(1.0-f1_kh) + &
+                Idt_diag * ((exp_kh-1.0)* TKE(i) + h_ent*dRL*(1.0-f1_kh) + &
                              dMKE*MKE_rate*(EF4_val-E_HxHpE))
-            CS%diag_TKE_mixing(i,j) = CS%diag_TKE_mixing(i,j) - &
-                Idt_diag*(h_ent*GV%H_to_Z)*dRL
-            CS%diag_TKE_pen_SW(i,j) = CS%diag_TKE_pen_SW(i,j) - &
-                Idt_diag*(h_ent*GV%H_to_Z)*Pen_En_Contrib
-            CS%diag_TKE_RiBulk(i,j) = CS%diag_TKE_RiBulk(i,j) + &
-                Idt_diag*dMKE*MKE_rate*E_HxHpE
+            CS%diag_TKE_mixing(i,j) = CS%diag_TKE_mixing(i,j) - Idt_diag*h_ent*dRL
+            CS%diag_TKE_pen_SW(i,j) = CS%diag_TKE_pen_SW(i,j) - Idt_diag*h_ent*Pen_En_Contrib
+            CS%diag_TKE_RiBulk(i,j) = CS%diag_TKE_RiBulk(i,j) + Idt_diag*dMKE*MKE_rate*E_HxHpE
           endif
 
           TKE(i) = 0.0
@@ -3119,9 +3115,9 @@ subroutine mixedlayer_detrain_1(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, d_e
   real :: Sdown               ! The salinity of the detrained water [S ~> ppt]
   real :: Tdown               ! The temperature of the detrained water  [C ~> degC]
   real :: dt_Time             ! The timestep divided by the detrainment timescale [nondim].
-  real :: g_H2_2Rho0dt        ! Half the gravitational acceleration times the square of the
+  real :: g_H2_2Rho0dt        ! Half the gravitational acceleration times the
                               ! conversion from H to m divided by the mean density times the time
-                              ! step [L2 Z T-3 H-2 R-1 ~> m4 s-3 kg-1 or m10 s-3 kg-3].
+                              ! step [L2 T-3 H-1 R-1 ~> m4 s-3 kg-1 or m7 s-3 kg-2].
   real :: g_H2_2dt            ! Half the gravitational acceleration times the square of the
                               ! conversion from H to Z divided by the diagnostic time step
                               ! [L2 Z H-2 T-3 ~> m s-3 or m7 kg-2 s-3].
@@ -3135,7 +3131,7 @@ subroutine mixedlayer_detrain_1(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, d_e
                         "CS%nkbl must be 1 in mixedlayer_detrain_1.")
 
   dt_Time = dt / CS%BL_detrain_time
-  g_H2_2Rho0dt = (GV%g_Earth * GV%H_to_Z**2) / (2.0 * GV%Rho0 * dt_diag)
+  g_H2_2Rho0dt = (GV%g_Earth * GV%H_to_Z) / (2.0 * GV%Rho0 * dt_diag)
   g_H2_2dt = (GV%g_Earth * GV%H_to_Z**2) / (2.0 * dt_diag)
 
   ! Move detrained water into the buffer layer.
@@ -3432,7 +3428,7 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
                  "A tiny floor on the amount of turbulent kinetic energy that is used when "//&
                  "the mixed layer does not yet contain HMIX_MIN fluid.  The default is so "//&
                  "small that its actual value is irrelevant, so long as it is greater than 0.", &
-                 units="m3 s-2", default=1.0e-150, scale=US%m_to_Z*US%m_s_to_L_T**2, &
+                 units="m3 s-2", default=1.0e-150, scale=GV%m_to_H*US%m_s_to_L_T**2, &
                  do_not_log=(Hmix_min_Z<=0.0))
 
   call get_param(param_file, mdl, "LIMIT_BUFFER_DETRAIN", CS%limit_det, &
@@ -3535,7 +3531,7 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
   if (CS%do_rivermix) &
     call get_param(param_file, mdl, "RIVERMIX_DEPTH", CS%rivermix_depth, &
                  "The depth to which rivers are mixed if DO_RIVERMIX is "//&
-                 "defined.", units="m", default=0.0, scale=US%m_to_Z)
+                 "defined.", units="m", default=0.0, scale=GV%m_to_H)
   call get_param(param_file, mdl, "USE_RIVER_HEAT_CONTENT", CS%use_river_heat_content, &
                  "If true, use the fluxes%runoff_Hflx field to set the "//&
                  "heat carried by runoff, instead of using SST*CP*liq_runoff.", &
@@ -3552,28 +3548,28 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
       Time, 'Surface mixed layer depth', 'm', conversion=GV%H_to_m)
   CS%id_TKE_wind = register_diag_field('ocean_model', 'TKE_wind', diag%axesT1, &
       Time, 'Wind-stirring source of mixed layer TKE', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_RiBulk = register_diag_field('ocean_model', 'TKE_RiBulk', diag%axesT1, &
       Time, 'Mean kinetic energy source of mixed layer TKE', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_conv = register_diag_field('ocean_model', 'TKE_conv', diag%axesT1, &
       Time, 'Convective source of mixed layer TKE', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_pen_SW = register_diag_field('ocean_model', 'TKE_pen_SW', diag%axesT1, &
       Time, 'TKE consumed by mixing penetrative shortwave radation through the mixed layer', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_mixing = register_diag_field('ocean_model', 'TKE_mixing', diag%axesT1, &
       Time, 'TKE consumed by mixing that deepens the mixed layer', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_mech_decay = register_diag_field('ocean_model', 'TKE_mech_decay', diag%axesT1, &
       Time, 'Mechanical energy decay sink of mixed layer TKE', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_conv_decay = register_diag_field('ocean_model', 'TKE_conv_decay', diag%axesT1, &
       Time, 'Convective energy decay sink of mixed layer TKE', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_TKE_conv_s2 = register_diag_field('ocean_model', 'TKE_conv_s2', diag%axesT1, &
       Time, 'Spurious source of mixed layer TKE from sigma2', &
-      'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
+      'm3 s-3', conversion=GV%H_to_m*(US%L_to_m**2)*(US%s_to_T**3))
   CS%id_PE_detrain = register_diag_field('ocean_model', 'PE_detrain', diag%axesT1, &
       Time, 'Spurious source of potential energy from mixed layer detrainment', &
       'W m-2', conversion=US%RZ3_T3_to_W_m2*US%L_to_Z**2)
