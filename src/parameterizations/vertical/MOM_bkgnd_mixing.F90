@@ -323,7 +323,7 @@ subroutine calculate_bkgnd_mixing(h, tv, N2_lay, Kd_lay, Kd_int, Kv_bkgnd, j, G,
   real, dimension(SZI_(G),SZK_(GV)+1),       intent(out)   :: Kd_int !< The background diapycnal diffusivity
                                                                   !! of each interface [Z2 T-1 ~> m2 s-1].
   real, dimension(SZI_(G),SZK_(GV)+1),       intent(out)   :: Kv_bkgnd !< The background vertical viscosity at
-                                                                  !! each interface [Z2 T-1 ~> m2 s-1]
+                                                                  !! each interface [H Z T-1 ~> m2 s-1 or Pa s]
   integer,                                   intent(in)    :: j   !< Meridional grid index
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   type(bkgnd_mixing_cs),                     pointer       :: CS  !< The control structure returned by
@@ -380,7 +380,7 @@ subroutine calculate_bkgnd_mixing(h, tv, N2_lay, Kd_lay, Kd_int, Kv_bkgnd, j, G,
 
       ! Update Kd and Kv.
       do K=1,nz+1
-        Kv_bkgnd(i,K) = US%m2_s_to_Z2_T*Kv_col(K)
+        Kv_bkgnd(i,K) = GV%m2_s_to_HZ_T * Kv_col(K)
         Kd_int(i,K) = US%m2_s_to_Z2_T*Kd_col(K)
       enddo
       do k=1,nz
@@ -428,7 +428,7 @@ subroutine calculate_bkgnd_mixing(h, tv, N2_lay, Kd_lay, Kd_int, Kv_bkgnd, j, G,
     ! Update interior values of Kd and Kv (uniform profile; no interpolation needed)
     do K=1,nz+1 ; do i=is,ie
       Kd_int(i,K) = Kd_int(i,1)
-      Kv_bkgnd(i,K) = Kd_int(i,1) * CS%prandtl_bkgnd
+      Kv_bkgnd(i,K) = GV%Z_to_H*Kd_int(i,1) * CS%prandtl_bkgnd
     enddo ; enddo
     do k=1,nz ; do i=is,ie
       Kd_lay(i,k) = Kd_int(i,1)
@@ -497,7 +497,7 @@ subroutine calculate_bkgnd_mixing(h, tv, N2_lay, Kd_lay, Kd_int, Kv_bkgnd, j, G,
     enddo
     do K=2,nz ; do i=is,ie
       Kd_int(i,K) = 0.5*(Kd_lay(i,k-1) + Kd_lay(i,k))
-      Kv_bkgnd(i,K) = Kd_int(i,K) * CS%prandtl_bkgnd
+      Kv_bkgnd(i,K) = GV%Z_to_H*Kd_int(i,K) * CS%prandtl_bkgnd
     enddo ; enddo
   endif
 

@@ -135,7 +135,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
                                                    !! each interface (not layer!) [Z2 T-2 ~> m2 s-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), &
                            intent(inout) :: kv_io  !< The vertical viscosity at each interface
-                                                   !! (not layer!) [Z2 T-1 ~> m2 s-1]. This discards any
+                                                   !! (not layer!) [H Z T-1 ~> m2 s-1 or Pa s]. This discards any
                                                    !! previous value (i.e. it is intent out) and
                                                    !! simply sets Kv = Prandtl * Kd_shear
   real,                    intent(in)    :: dt     !< Time increment [T ~> s].
@@ -324,7 +324,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
     do K=1,nz+1 ; do i=is,ie
       kappa_io(i,j,K) = G%mask2dT(i,j) * GV%H_to_Z*kappa_2d(i,K)
       tke_io(i,j,K) = G%mask2dT(i,j) * tke_2d(i,K)
-      kv_io(i,j,K) = ( G%mask2dT(i,j) * GV%H_to_Z*kappa_2d(i,K) ) * CS%Prandtl_turb
+      kv_io(i,j,K) = ( G%mask2dT(i,j) * kappa_2d(i,K) ) * CS%Prandtl_turb
     enddo ; enddo
 
   enddo ! end of j-loop
@@ -368,7 +368,8 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
                            intent(out)   :: tke_io !< The turbulent kinetic energy per unit mass at
                                                    !! each interface (not layer!) [Z2 T-2 ~> m2 s-2].
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)+1), &
-                           intent(inout) :: kv_io  !< The vertical viscosity at each interface [Z2 T-1 ~> m2 s-1].
+                           intent(inout) :: kv_io  !< The vertical viscosity at each interface
+                                                   !! [H Z T-1 ~> m2 s-1 or Pa s].
                                                    !! The previous value is used to initialize kappa
                                                    !! in the vertex columns as Kappa = Kv/Prandtl
                                                    !! to accelerate the iteration toward convergence.
@@ -597,7 +598,7 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
 
     do K=1,nz+1 ; do I=IsB,IeB
       tke_io(I,J,K) = G%mask2dBu(I,J) * tke_2d(I,K)
-      kv_io(I,J,K) = ( G%mask2dBu(I,J) * GV%H_to_Z * kappa_2d(I,K,J2) ) * CS%Prandtl_turb
+      kv_io(I,J,K) = ( G%mask2dBu(I,J) * kappa_2d(I,K,J2) ) * CS%Prandtl_turb
     enddo ; enddo
     if (J>=G%jsc) then ; do K=1,nz+1 ; do i=G%isc,G%iec
       ! Set the diffusivities in tracer columns from the values at vertices.
@@ -1841,17 +1842,17 @@ function kappa_shear_init(Time, G, GV, US, param_file, diag, CS)
                  "The background diffusivity that is used to smooth the "//&
                  "density and shear profiles before solving for the "//&
                  "diffusivities.  The default is the greater of KD and 1e-7 m2 s-1.", &
-                 units="m2 s-1", default=kappa_0_default*US%Z2_T_to_m2_s, scale=US%m2_s_to_Z2_T*GV%Z_to_H, &
+                 units="m2 s-1", default=kappa_0_default*US%Z2_T_to_m2_s, scale=GV%m2_s_to_HZ_T, &
                  do_not_log=just_read)
   call get_param(param_file, mdl, "KD_SEED_KAPPA_SHEAR", CS%kappa_seed, &
                  "A moderately large seed value of diapycnal diffusivity that is used as a "//&
                  "starting turbulent diffusivity in the iterations to find an energetically "//&
                  "constrained solution for the shear-driven diffusivity.", &
-                 units="m2 s-1", default=1.0, scale=US%m2_s_to_Z2_T*GV%Z_to_H)
+                 units="m2 s-1", default=1.0, scale=GV%m2_s_to_HZ_T)
   call get_param(param_file, mdl, "KD_TRUNC_KAPPA_SHEAR", CS%kappa_trunc, &
                  "The value of shear-driven diffusivity that is considered negligible "//&
                  "and is rounded down to 0. The default is 1% of KD_KAPPA_SHEAR_0.", &
-                 units="m2 s-1", default=0.01*CS%kappa_0*US%Z2_T_to_m2_s*GV%H_to_Z, scale=US%m2_s_to_Z2_T*GV%Z_to_H, &
+                 units="m2 s-1", default=0.01*CS%kappa_0*GV%HZ_T_to_m2_s, scale=GV%m2_s_to_HZ_T, &
                  do_not_log=just_read)
   call get_param(param_file, mdl, "FRI_CURVATURE", CS%FRi_curvature, &
                  "The nondimensional curvature of the function of the "//&

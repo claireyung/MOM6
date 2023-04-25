@@ -97,7 +97,7 @@ type, public :: wave_parameters_CS ; private
                        !! Horizontal -> V points
                        !! Vertical -> Mid-points
   real, allocatable, dimension(:,:,:), public :: &
-    KvS                !< Viscosity for Stokes Drift shear [Z2 T-1 ~> m2 s-1]
+    KvS                !< Viscosity for Stokes Drift shear [H Z T-1 ~> m2 s-1 or Pa s]
 
   ! The remainder of this control structure is private
   integer :: WaveMethod = -99 !< Options for including wave information
@@ -1573,12 +1573,12 @@ subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
         h_lay = 0.5*(h(i,j,k)+h(i+1,j,k))
         dTauUp = 0.0
         if (k > 1) &
-          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i+1,j,k)) * GV%Z_to_H**2) * &
+          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i+1,j,k)) * GV%Z_to_H) * &
                (waves%us_x(i,j,k-1)-waves%us_x(i,j,k)) / &
                (0.5*(h_lay + 0.5*(h(i,j,k-1)+h(i+1,j,k-1)) ))
         dTauDn = 0.0
         if (k < GV%ke-1) &
-          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i+1,j,k+1)) * GV%Z_to_H**2) * &
+          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i+1,j,k+1)) * GV%Z_to_H) * &
                (waves%us_x(i,j,k)-waves%us_x(i,j,k+1)) / &
                (0.5*(h_lay + 0.5*(h(i,j,k+1)+h(i+1,j,k+1)) ))
         u(i,j,k) = u(i,j,k) + dt * (dTauUp-dTauDn) / h_lay
@@ -1592,12 +1592,12 @@ subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
         h_lay = 0.5*(h(i,j,k)+h(i,j+1,k))
         dTauUp = 0.
         if (k > 1) &
-          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i,j+1,k)) * GV%Z_to_H**2) * &
+          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i,j+1,k)) * GV%Z_to_H) * &
                (waves%us_y(i,j,k-1)-waves%us_y(i,j,k)) / &
                (0.5*(h_lay + 0.5*(h(i,j,k-1)+h(i,j+1,k-1)) ))
         dTauDn = 0.0
         if (k < GV%ke-1) &
-          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i,j+1,k+1)) * GV%Z_to_H**2) * &
+          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i,j+1,k+1)) * GV%Z_to_H) * &
                (waves%us_y(i,j,k)-waves%us_y(i,j,k+1)) / &
                (0.5*(h_lay + 0.5*(h(i,j,k+1)+h(i,j+1,k+1)) ))
         v(i,J,k) = v(i,J,k) + dt * (dTauUp-dTauDn) / h_lay

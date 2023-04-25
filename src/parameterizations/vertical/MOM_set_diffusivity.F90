@@ -79,7 +79,7 @@ type, public :: set_diffusivity_CS ; private
   real    :: cdrag           !< quadratic drag coefficient [nondim]
   real    :: IMax_decay      !< Inverse of a maximum decay scale for
                              !! bottom-drag driven turbulence [H-1 ~> m-1 or m2 kg-1].
-  real    :: Kv              !< The interior vertical viscosity [Z2 T-1 ~> m2 s-1].
+  real    :: Kv              !< The interior vertical viscosity [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   real    :: Kd              !< interior diapycnal diffusivity [Z2 T-1 ~> m2 s-1].
   real    :: Kd_min          !< minimum diapycnal diffusivity [Z2 T-1 ~> m2 s-1].
   real    :: Kd_max          !< maximum increment for diapycnal diffusivity [Z2 T-1 ~> m2 s-1].
@@ -183,7 +183,7 @@ type diffusivity_diags
     Kd_work  => NULL(), & !< layer integrated work by diapycnal mixing [R Z3 T-3 ~> W m-2]
     maxTKE   => NULL(), & !< energy required to entrain to h_max [H Z2 T-3 ~> m3 s-3 or W m-2]
     Kd_bkgnd => NULL(), & !< Background diffusivity at interfaces [Z2 T-1 ~> m2 s-1]
-    Kv_bkgnd => NULL(), & !< Viscosity from background diffusivity at interfaces [Z2 T-1 ~> m2 s-1]
+    Kv_bkgnd => NULL(), & !< Viscosity from background diffusivity at interfaces [H Z T-1 ~> m2 s-1 or Pa s]
     KT_extra => NULL(), & !< Double diffusion diffusivity for temperature [Z2 T-1 ~> m2 s-1].
     KS_extra => NULL(), & !< Double diffusion diffusivity for salinity [Z2 T-1 ~> m2 s-1].
     drho_rat => NULL()    !< The density difference ratio used in double diffusion [nondim].
@@ -258,7 +258,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
   real, dimension(SZI_(G),SZK_(GV)+1) :: &
     N2_int,   &   !< squared buoyancy frequency associated at interfaces [T-2 ~> s-2]
     Kd_int_2d, &  !< The interface diffusivities [Z2 T-1 ~> m2 s-1]
-    Kv_bkgnd, &   !< The background diffusion related interface viscosities [Z2 T-1 ~> m2 s-1]
+    Kv_bkgnd, &   !< The background diffusion related interface viscosities [H Z T-1 ~> m2 s-1 or Pa s]
     dRho_int, &   !< Locally referenced potential density difference across interfaces [R ~> kg m-3]
     KT_extra, &   !< Double diffusion diffusivity of temperature [Z2 T-1 ~> m2 s-1]
     KS_extra      !< Double diffusion diffusivity of salinity [Z2 T-1 ~> m2 s-1]
@@ -347,7 +347,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
       if (associated(visc%Kv_shear)) visc%Kv_shear(:,:,:) = 0.0 ! needed for other parameterizations
       if (CS%debug) then
         call hchksum(visc%Kd_shear, "after calc_KS_vert visc%Kd_shear", G%HI, scale=US%Z2_T_to_m2_s)
-        call Bchksum(visc%Kv_shear_Bu, "after calc_KS_vert visc%Kv_shear_Bu", G%HI, scale=US%Z2_T_to_m2_s)
+        call Bchksum(visc%Kv_shear_Bu, "after calc_KS_vert visc%Kv_shear_Bu", G%HI, scale=GV%HZ_T_to_m2_s)
         call Bchksum(visc%TKE_turb, "after calc_KS_vert visc%TKE_turb", G%HI, scale=US%Z_to_m**2*US%s_to_T**2)
       endif
     else
@@ -356,7 +356,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
                                  visc%Kv_shear, dt, G, GV, US, CS%kappaShear_CSp)
       if (CS%debug) then
         call hchksum(visc%Kd_shear, "after calc_KS visc%Kd_shear", G%HI, scale=US%Z2_T_to_m2_s)
-        call hchksum(visc%Kv_shear, "after calc_KS visc%Kv_shear", G%HI, scale=US%Z2_T_to_m2_s)
+        call hchksum(visc%Kv_shear, "after calc_KS visc%Kv_shear", G%HI, scale=GV%HZ_T_to_m2_s)
         call hchksum(visc%TKE_turb, "after calc_KS visc%TKE_turb", G%HI, scale=US%Z_to_m**2*US%s_to_T**2)
       endif
     endif
@@ -367,7 +367,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     call calculate_CVMix_shear(u_h, v_h, h, tv, visc%Kd_shear, visc%Kv_shear, G, GV, US, CS%CVMix_shear_CSp)
     if (CS%debug) then
       call hchksum(visc%Kd_shear, "after CVMix_shear visc%Kd_shear", G%HI, scale=US%Z2_T_to_m2_s)
-      call hchksum(visc%Kv_shear, "after CVMix_shear visc%Kv_shear", G%HI, scale=US%Z2_T_to_m2_s)
+      call hchksum(visc%Kv_shear, "after CVMix_shear visc%Kv_shear", G%HI, scale=GV%HZ_T_to_m2_s)
     endif
   elseif (associated(visc%Kv_shear)) then
     visc%Kv_shear(:,:,:) = 0.0 ! needed if calculate_kappa_shear is not enabled
@@ -591,7 +591,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
 
     if (allocated(visc%kv_bbl_u) .and. allocated(visc%kv_bbl_v)) then
       call uvchksum("BBL Kv_bbl_[uv]", visc%kv_bbl_u, visc%kv_bbl_v, G%HI, &
-                    haloshift=0, symmetric=.true., scale=US%Z2_T_to_m2_s, &
+                    haloshift=0, symmetric=.true., scale=GV%HZ_T_to_m2_s, &
                     scalar_pair=.true.)
     endif
 
@@ -1684,8 +1684,7 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
     vstar, & ! ustar at at v-points [Z T-1 ~> m s-1].
     v2_bbl   ! square of average meridional velocity in BBL [L2 T-2 ~> m2 s-2]
 
-  real :: cdrag_sqrt_H  ! Square root of the drag coefficient, times a unit conversion
-                      ! factor from thicknesses to vertical depths [Z H-1 ~> nondim or m3 kg-1]
+  real :: cdrag_sqrt  ! Square root of the drag coefficient [nondim]
   real :: hvel        ! thickness at velocity points [H ~> m or kg m-2]
 
   logical :: domore, do_i(SZI_(G))
@@ -1719,7 +1718,7 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
     return
   endif
 
-  cdrag_sqrt_H = GV%H_to_Z*sqrt(CS%cdrag)
+  cdrag_sqrt = sqrt(CS%cdrag)
 
   !$OMP parallel default(shared) private(do_i,vhtot,htot,domore,hvel,uhtot,ustar,u2_bbl)
   !$OMP do
@@ -1730,9 +1729,9 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
       do_i(i) = .false. ; vstar(i,J) = 0.0 ; vhtot(i) = 0.0 ; htot(i) = 0.0
     enddo
     if (allocated(visc%Kv_bbl_v)) then
-      do i=is,ie ; if ((G%mask2dCv(i,J) > 0.0) .and. (cdrag_sqrt_H*visc%bbl_thick_v(i,J) > 0.0)) then
+      do i=is,ie ; if ((G%mask2dCv(i,J) > 0.0) .and. (cdrag_sqrt*visc%bbl_thick_v(i,J) > 0.0)) then
         do_i(i) = .true.
-        vstar(i,J) = visc%Kv_bbl_v(i,J) / (cdrag_sqrt_H*visc%bbl_thick_v(i,J))
+        vstar(i,J) = visc%Kv_bbl_v(i,J) / (cdrag_sqrt*visc%bbl_thick_v(i,J))
       endif ; enddo
     endif
     !### What about terms from visc%Ray?
@@ -1784,9 +1783,9 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
       do_i(I) = .false. ; ustar(I) = 0.0 ; uhtot(I) = 0.0 ; htot(I) = 0.0
     enddo
     if (allocated(visc%bbl_thick_u)) then
-      do I=is-1,ie ; if ((G%mask2dCu(I,j) > 0.0) .and. (cdrag_sqrt_H*visc%bbl_thick_u(I,j) > 0.0))  then
+      do I=is-1,ie ; if ((G%mask2dCu(I,j) > 0.0) .and. (cdrag_sqrt*visc%bbl_thick_u(I,j) > 0.0))  then
         do_i(I) = .true.
-        ustar(I) = visc%Kv_bbl_u(I,j) / (cdrag_sqrt_H*visc%bbl_thick_u(I,j))
+        ustar(I) = visc%Kv_bbl_u(I,j) / (cdrag_sqrt*visc%bbl_thick_u(I,j))
       endif ; enddo
     endif
 
@@ -2172,7 +2171,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   call get_param(param_file, mdl, "KV", CS%Kv, &
                  "The background kinematic viscosity in the interior. "//&
                  "The molecular value, ~1e-6 m2 s-1, may be used.", &
-                 units="m2 s-1", scale=US%m2_s_to_Z2_T, fail_if_missing=.true.)
+                 units="m2 s-1", scale=GV%m2_s_to_HZ_T, fail_if_missing=.true.)
 
   call get_param(param_file, mdl, "KD", CS%Kd, &
                  "The background diapycnal diffusivity of density in the "//&
@@ -2240,7 +2239,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   CS%id_Kd_bkgnd = register_diag_field('ocean_model', 'Kd_bkgnd', diag%axesTi, Time, &
       'Background diffusivity added by MOM_bkgnd_mixing module', 'm2/s', conversion=US%Z2_T_to_m2_s)
   CS%id_Kv_bkgnd = register_diag_field('ocean_model', 'Kv_bkgnd', diag%axesTi, Time, &
-      'Background viscosity added by MOM_bkgnd_mixing module', 'm2/s', conversion=US%Z2_T_to_m2_s)
+      'Background viscosity added by MOM_bkgnd_mixing module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
 
   CS%id_Kd_layer = register_diag_field('ocean_model', 'Kd_layer', diag%axesTL, Time, &
       'Diapycnal diffusivity of layers (as set)', 'm2 s-1', conversion=US%Z2_T_to_m2_s)
