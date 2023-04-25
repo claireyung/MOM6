@@ -80,8 +80,17 @@ type, public :: verticalGrid_type
                         !! thickness units [H R-1 Z-1 ~> m3 kg-2 or 1].
   real :: H_to_MKS      !< A constant that translates thickness units to its MKS unit
                         !! (m or kg m-2) based on GV%Boussinesq [m H-1 ~> 1] or [kg m-2 H-1 ~> 1]
+  real :: m2_s_to_HZ_T  !< The combination of conversion factors that converts kinematic viscosities
+                        !! in m2 s-1 to the internal units of the kinematic (in Boussinesq mode)
+                        !! or dynamic viscosity [H Z s T-1 m-2 ~> 1 or kg m-3]
+  real :: HZ_T_to_m2_s  !! The combination of conversion factors that converts the viscosities from
+                        !! their internal representation into a kinematic viscosity in m2 s-1
+                        !! [T m2 H-1 Z-1 s-1 ~> 1 or m3 kg-1]
+  real :: HZ_T_to_MKS   !! The combination of conversion factors that converts the viscosities from
+                        !! their internal representation into their unnscaled MKS units
+                        !! (m2 s-1 or Pa s), depending on whether the model is Boussinesq
+                        !! [T m2 H-1 Z-1 s-1 ~> 1] or [T Pa s H-1 Z-1 ~> 1]
 
-  real :: m_to_H_restart = 1.0 !< A copy of the m_to_H that is used in restart files.
 end type verticalGrid_type
 
 contains
@@ -97,6 +106,8 @@ subroutine verticalGridInit( param_file, GV, US )
   ! Local variables
   integer :: nk, H_power
   real    :: H_rescale_factor ! The integer power of 2 by which thicknesses are rescaled [nondim]
+  real    :: rho_Kv  ! The density used convert input kinematic viscosities into dynamic viscosities
+                     ! when in non-Boussinesq mode [R ~> kg m-3]
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=16) :: mdl = 'MOM_verticalGrid'
@@ -126,6 +137,11 @@ subroutine verticalGridInit( param_file, GV, US )
                  "height changes.  This only applies if BOUSSINESQ is false.", &
                  default=.true., do_not_log=GV%Boussinesq)
   if (GV%Boussinesq) GV%semi_Boussinesq = .true.
+  call get_param(param_file, mdl, "RHO_KV_CONVERT", Rho_Kv, &
+                 "The density used to convert input kinematic viscosities into dynamic "//&
+                 "viscosities in non-BOUSSINESQ mode, and similarly for vertical diffusivities.", &
+                 units="kg m-3", default=GV%Rho0*US%R_to_kg_m3, scale=US%kg_m3_to_R, &
+                 do_not_log=GV%Boussinesq)
   call get_param(param_file, mdl, "ANGSTROM", GV%Angstrom_Z, &
                  "The minimum layer thickness, usually one-Angstrom.", &
                  units="m", default=1.0e-10, scale=US%m_to_Z)
@@ -170,12 +186,14 @@ subroutine verticalGridInit( param_file, GV, US )
     GV%m_to_H = 1.0 / GV%H_to_m
     GV%Angstrom_H = GV%m_to_H * US%Z_to_m*GV%Angstrom_Z
     GV%H_to_MKS = GV%H_to_m
+    GV%m2_s_to_HZ_T = GV%m_to_H * US%m_to_Z * US%T_to_s
   else
     GV%kg_m2_to_H = 1.0 / GV%H_to_kg_m2
     GV%m_to_H = US%R_to_kg_m3*GV%Rho0 * GV%kg_m2_to_H
     GV%H_to_m = GV%H_to_kg_m2 / (US%R_to_kg_m3*GV%Rho0)
     GV%Angstrom_H = US%Z_to_m*GV%Angstrom_Z * 1000.0*GV%kg_m2_to_H
     GV%H_to_MKS = GV%H_to_kg_m2
+    GV%m2_s_to_HZ_T = US%R_to_kg_m3*rho_Kv * GV%kg_m2_to_H * US%m_to_Z * US%T_to_s
   endif
   GV%H_subroundoff = 1e-20 * max(GV%Angstrom_H, GV%m_to_H*1e-17)
   GV%dZ_subroundoff = 1e-20 * max(GV%Angstrom_Z, US%m_to_Z*1e-17)
@@ -187,6 +205,9 @@ subroutine verticalGridInit( param_file, GV, US )
 
   GV%H_to_RZ = GV%H_to_kg_m2 * US%kg_m3_to_R * US%m_to_Z
   GV%RZ_to_H = GV%kg_m2_to_H * US%R_to_kg_m3 * US%Z_to_m
+
+  GV%HZ_T_to_m2_s = 1.0 / GV%m2_s_to_HZ_T
+  GV%HZ_T_to_MKS = GV%H_to_MKS * US%Z_to_m * US%s_to_T
 
   ! Note based on the above that for both Boussinsq and non-Boussinesq cases that:
   !     GV%Rho0 = GV%Z_to_H * GV%H_to_RZ
