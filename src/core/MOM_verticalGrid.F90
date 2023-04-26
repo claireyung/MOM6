@@ -83,10 +83,10 @@ type, public :: verticalGrid_type
   real :: m2_s_to_HZ_T  !< The combination of conversion factors that converts kinematic viscosities
                         !! in m2 s-1 to the internal units of the kinematic (in Boussinesq mode)
                         !! or dynamic viscosity [H Z s T-1 m-2 ~> 1 or kg m-3]
-  real :: HZ_T_to_m2_s  !! The combination of conversion factors that converts the viscosities from
+  real :: HZ_T_to_m2_s  !< The combination of conversion factors that converts the viscosities from
                         !! their internal representation into a kinematic viscosity in m2 s-1
                         !! [T m2 H-1 Z-1 s-1 ~> 1 or m3 kg-1]
-  real :: HZ_T_to_MKS   !! The combination of conversion factors that converts the viscosities from
+  real :: HZ_T_to_MKS   !< The combination of conversion factors that converts the viscosities from
                         !! their internal representation into their unnscaled MKS units
                         !! (m2 s-1 or Pa s), depending on whether the model is Boussinesq
                         !! [T m2 H-1 Z-1 s-1 ~> 1] or [T Pa s H-1 Z-1 ~> 1]

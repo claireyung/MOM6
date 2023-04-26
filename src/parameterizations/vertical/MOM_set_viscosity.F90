@@ -1875,7 +1875,7 @@ subroutine set_visc_register_restarts(HI, GV, US, param_file, visc, restart_CS)
   logical :: use_CVMix_shear, MLE_use_PBL_MLD, use_CVMix_conv
   integer :: isd, ied, jsd, jed, nz
   real :: hfreeze !< If hfreeze > 0 [Z ~> m], melt potential will be computed.
-  character(len=16)  :: Kv_units
+  character(len=16)  :: Kv_units, Kd_units
   character(len=40)  :: mdl = "MOM_set_visc"  ! This module's name.
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
@@ -1901,16 +1901,16 @@ subroutine set_visc_register_restarts(HI, GV, US, param_file, visc, restart_CS)
   endif
 
   if (GV%Boussinesq) then
-    Kv_units = "m2 s-1"
+    Kv_units = "m2 s-1" ; Kd_units = "m2 s-1"
   else
-    Kv_units = "Pa s"
+    Kv_units = "Pa s" ; Kd_units = "kg m-1 s-1"
   endif
 
   if (use_kappa_shear .or. useKPP .or. useEPBL .or. use_CVMix_shear .or. use_CVMix_conv) then
     call safe_alloc_ptr(visc%Kd_shear, isd, ied, jsd, jed, nz+1)
     call register_restart_field(visc%Kd_shear, "Kd_shear", .false., restart_CS, &
                   "Shear-driven turbulent diffusivity at interfaces", &
-                  units="m2 s-1", conversion=US%Z2_T_to_m2_s, z_grid='i')
+                  units=Kd_units, conversion=GV%HZ_T_to_MKS, z_grid='i')
   endif
   if (useKPP .or. useEPBL .or. use_CVMix_shear .or. use_CVMix_conv .or. &
       (use_kappa_shear .and. .not.KS_at_vertex )) then

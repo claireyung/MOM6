@@ -277,7 +277,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
   real,                    intent(in)    :: dt     !< Time increment [T ~> s].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), &
                            intent(out)   :: Kd_int !< The diagnosed diffusivities at interfaces
-                                                   !! [Z2 T-1 ~> m2 s-1].
+                                                   !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
   type(energetic_PBL_CS),  intent(inout) :: CS     !< Energetic PBL control structure
   real, dimension(SZI_(G),SZJ_(G)), &
                            intent(in)    :: buoy_flux !< The surface buoyancy flux [Z2 T-3 ~> m2 s-3].
@@ -317,7 +317,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
     u_2d, &         ! A 2-d slice of the zonal velocity [L T-1 ~> m s-1].
     v_2d            ! A 2-d slice of the meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZK_(GV)+1) :: &
-    Kd_2d           ! A 2-d version of the diapycnal diffusivity [Z2 T-1 ~> m2 s-1].
+    Kd_2d           ! A 2-d version of the diapycnal diffusivity [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   real, dimension(SZK_(GV)) :: &
     h, &            ! The layer thickness [H ~> m or kg m-2].
     T0, &           ! The initial layer temperatures [C ~> degC].
@@ -436,7 +436,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
 
       ! Copy the diffusivities to a 2-d array.
       do K=1,nz+1
-        Kd_2d(i,K) = Kd(K)
+        Kd_2d(i,K) = GV%Z_to_H*Kd(K)
       enddo
       CS%ML_depth(i,j) = MLD_io
 

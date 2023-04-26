@@ -265,7 +265,7 @@ type, public :: vertvisc_type
     MLD => NULL()  !< Instantaneous active mixing layer depth [H ~> m or kg m-2].
   real, pointer, dimension(:,:,:) :: Kd_shear => NULL()
                 !< The shear-driven turbulent diapycnal diffusivity at the interfaces between layers
-                !! in tracer columns [Z2 T-1 ~> m2 s-1].
+                !! in tracer columns [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   real, pointer, dimension(:,:,:) :: Kv_shear => NULL()
                 !< The shear-driven turbulent vertical viscosity at the interfaces between layers
                 !! in tracer columns [H Z T-1 ~> m2 s-1 or Pa s]
