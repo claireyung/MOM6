@@ -41,12 +41,18 @@ type, public :: verticalGrid_type
 
   ! The following variables give information about the vertical grid.
   logical :: Boussinesq !< If true, make the Boussinesq approximation.
+  logical :: semi_Boussinesq !< If true, do non-Boussinesq pressure force calculations and
+                        !! use mass-based "thicknesses, but use Rho0 to convert layer thicknesses
+                        !! into certain height changes.  This only applies if BOUSSINESQ is false.
   real :: Angstrom_H    !< A one-Angstrom thickness in the model thickness units [H ~> m or kg m-2].
   real :: Angstrom_Z    !< A one-Angstrom thickness in the model depth units [Z ~> m].
   real :: Angstrom_m    !< A one-Angstrom thickness [m].
   real :: H_subroundoff !< A thickness that is so small that it can be added to a thickness of
                         !! Angstrom or larger without changing it at the bit level [H ~> m or kg m-2].
                         !! If Angstrom is 0 or exceedingly small, this is negligible compared to 1e-17 m.
+  real :: dZ_subroundoff !< A thickness in height units that is so small that it can be added to a
+                        !! vertical distance of Angstrom_Z or 1e-17 m without changing it at the bit
+                        !! level [Z ~> m].  This is the height equivalent of H_subroundoff.
   real, allocatable, dimension(:) :: &
     g_prime, &          !< The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
     Rlay                !< The target coordinate value (potential density) in each layer [R ~> kg m-3].
@@ -114,6 +120,12 @@ subroutine verticalGridInit( param_file, GV, US )
                  units="kg m-3", default=1035.0, scale=US%kg_m3_to_R)
   call get_param(param_file, mdl, "BOUSSINESQ", GV%Boussinesq, &
                  "If true, make the Boussinesq approximation.", default=.true.)
+  call get_param(param_file, mdl, "SEMI_BOUSSINESQ", GV%semi_Boussinesq, &
+                 "If true, do non-Boussinesq pressure force calculations and use mass-based "//&
+                 "thicknesses, but use RHO_0 to convert layer thicknesses into certain "//&
+                 "height changes.  This only applies if BOUSSINESQ is false.", &
+                 default=.true., do_not_log=GV%Boussinesq)
+  if (GV%Boussinesq) GV%semi_Boussinesq = .true.
   call get_param(param_file, mdl, "ANGSTROM", GV%Angstrom_Z, &
                  "The minimum layer thickness, usually one-Angstrom.", &
                  units="m", default=1.0e-10, scale=US%m_to_Z)
@@ -165,7 +177,8 @@ subroutine verticalGridInit( param_file, GV, US )
     GV%Angstrom_H = US%Z_to_m*GV%Angstrom_Z * 1000.0*GV%kg_m2_to_H
     GV%H_to_MKS = GV%H_to_kg_m2
   endif
-  GV%H_subroundoff = 1e-20 * max(GV%Angstrom_H,GV%m_to_H*1e-17)
+  GV%H_subroundoff = 1e-20 * max(GV%Angstrom_H, GV%m_to_H*1e-17)
+  GV%dZ_subroundoff = 1e-20 * max(GV%Angstrom_Z, US%m_to_Z*1e-17)
   GV%H_to_Pa = US%L_T_to_m_s**2*US%m_to_Z * GV%g_Earth * GV%H_to_kg_m2
 
   GV%H_to_Z = GV%H_to_m * US%m_to_Z
