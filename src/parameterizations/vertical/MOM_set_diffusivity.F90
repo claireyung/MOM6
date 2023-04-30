@@ -22,6 +22,7 @@ use MOM_file_parser,         only : get_param, log_param, log_version, param_fil
 use MOM_forcing_type,        only : forcing, optics_type
 use MOM_full_convection,     only : full_convection
 use MOM_grid,                only : ocean_grid_type
+use MOM_interface_heights,   only : thickness_to_dz
 use MOM_internal_tides,      only : int_tide_CS, get_lowmode_loss
 use MOM_intrinsic_functions, only : invcosh
 use MOM_io,                  only : slasher, MOM_read_data
@@ -690,6 +691,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
                   ! across an interface times the difference across the
                   ! interface above it [nondim]
     rho_0,   &    ! Layer potential densities relative to surface pressure [R ~> kg m-3]
+    dz,      &    ! Height change across layers [Z ~> m]
     maxEnt        ! maxEnt is the maximum value of entrainment from below (with
                   ! compensating entrainment from above to keep the layer
                   ! density from changing) that will not deplete all of the
@@ -711,7 +713,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
   real :: G_IRho0     ! Alternate calculation of G_Rho0 with thickness rescaling factors
                       ! [Z2 T-2 R-1 H-1 ~> m4 s-2 kg-1 or m7 kg-2 s-2]
   real :: I_dt        ! 1/dt [T-1 ~> s-1]
-  real :: H_neglect   ! negligibly small thickness [H ~> m or kg m-2]
+  real :: dz_neglect  ! A negligibly small height change [Z ~> m]
   real :: hN2pO2      ! h (N^2 + Omega^2), in [Z T-2 ~> m s-2].
   logical :: do_i(SZI_(G))
 
@@ -721,7 +723,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
 
   I_dt      = 1.0 / dt
   Omega2    = CS%omega**2
-  H_neglect = GV%H_subroundoff
+  dz_neglect = GV%dZ_subroundoff
   G_Rho0    = (US%L_to_Z**2 * GV%g_Earth) / GV%Rho0
   if (CS%answer_date < 20190101) then
     G_IRho0 = (US%L_to_Z**2 * GV%g_Earth) * GV%H_to_Z**2 * GV%RZ_to_H
@@ -729,10 +731,13 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
     G_IRho0 = GV%H_to_Z*G_Rho0
   endif
 
+  ! Find the vertical distances across layers.
+  call thickness_to_dz(h, tv, dz, j, G, GV)
+
   ! Simple but coordinate-independent estimate of Kd/TKE
   if (CS%simple_TKE_to_Kd) then
     do k=1,nz ; do i=is,ie
-      hN2pO2 = GV%H_to_Z*h(i,j,k) * (N2_lay(i,k) + Omega2) ! Units of Z T-2.
+      hN2pO2 = dz(i,k) * (N2_lay(i,k) + Omega2) ! Units of Z T-2.
       if (hN2pO2 > 0.) then
         TKE_to_Kd(i,k) = 1.0 / hN2pO2 ! Units of T2 H-1.
       else ; TKE_to_Kd(i,k) = 0. ; endif
@@ -834,7 +839,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
   enddo
   do k=2,kmb ; do i=is,ie
     maxTKE(i,k) = 0.0
-    TKE_to_Kd(i,k) = 1.0 / ((N2_lay(i,k) + Omega2) * GV%H_to_Z*(h(i,j,k) + H_neglect))
+    TKE_to_Kd(i,k) = 1.0 / ((N2_lay(i,k) + Omega2) * (dz(i,k) + dz_neglect))
   enddo ; enddo
   do k=kmb+1,kb_min-1 ; do i=is,ie
     !   These are the properties in the deeper mixed and buffer layers, and
@@ -859,7 +864,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
       ! TKE_to_Kd should be rho_InSitu / G_Earth * (delta rho_InSitu)
       ! The omega^2 term in TKE_to_Kd is due to a rescaling of the efficiency of turbulent
       ! mixing by a factor of N^2 / (N^2 + Omega^2), as proposed by Melet et al., 2013?
-      TKE_to_Kd(i,k) = 1.0 / (G_Rho0 * dRho_lay + CS%omega**2 * GV%H_to_Z*(h(i,j,k) + H_neglect))
+      TKE_to_Kd(i,k) = 1.0 / (G_Rho0 * dRho_lay + CS%omega**2 * (dz(i,k) + dz_neglect))
     endif
   enddo ; enddo
 
@@ -897,7 +902,8 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
     dRho_int_unfilt, & ! unfiltered density differences across interfaces [R ~> kg m-3]
     dRho_dT,         & ! partial derivative of density wrt temp [R C-1 ~> kg m-3 degC-1]
     dRho_dS            ! partial derivative of density wrt saln [R S-1 ~> kg m-3 ppt-1]
-
+  real, dimension(SZI_(G),SZK_(GV)) :: &
+    dz            ! Height change across layers [Z ~> m]
   real, dimension(SZI_(G)) :: &
     pres,      &  ! pressure at each interface [R L2 T-2 ~> Pa]
     Temp_int,  &  ! temperature at each interface [C ~> degC]
@@ -905,9 +911,9 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
     drho_bot,  &  ! A density difference [R ~> kg m-3]
     h_amp,     &  ! The topographic roughness amplitude [Z ~> m].
     hb,        &  ! The thickness of the bottom layer [H ~> m or kg m-2]
-    z_from_bot    ! The hieght above the bottom [H ~> m or kg m-2]
+    z_from_bot    ! The height above the bottom [Z ~> m]
 
-  real :: dz_int    ! thickness associated with an interface [H ~> m or kg m-2]
+  real :: dz_int    ! Vertical distance associated with an interface [Z ~> m]
   real :: G_Rho0    ! Gravitational acceleration, perhaps divided by Boussinesq reference density,
                     ! times some unit conversion factors [H T-2 R-1 ~> m4 s-2 kg-1 or m s-2].
   real :: H_neglect ! A negligibly small thickness [H ~> m or kg m-2]
@@ -944,7 +950,7 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
         dRho_int(i,K) = max(dRho_dT(i,K)*(T_f(i,j,k) - T_f(i,j,k-1)) + &
                             dRho_dS(i,K)*(S_f(i,j,k) - S_f(i,j,k-1)), 0.0)
         dRho_int_unfilt(i,K) = max(dRho_dT(i,K)*(tv%T(i,j,k) - tv%T(i,j,k-1)) + &
-                            dRho_dS(i,K)*(tv%S(i,j,k) - tv%S(i,j,k-1)), 0.0)
+                                   dRho_dS(i,K)*(tv%S(i,j,k) - tv%S(i,j,k-1)), 0.0)
       enddo
     enddo
   else
@@ -952,6 +958,9 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
       dRho_int(i,K) = GV%Rlay(k) - GV%Rlay(k-1)
     enddo ; enddo
   endif
+
+  ! Find the vertical distances across layers.
+  call thickness_to_dz(h, tv, dz, j, G, GV)
 
   ! Set the buoyancy frequencies.
   do k=1,nz ; do i=is,ie
@@ -967,7 +976,7 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
   ! Find the bottom boundary layer stratification, and use this in the deepest layers.
   do i=is,ie
     hb(i) = 0.0 ; dRho_bot(i) = 0.0 ; h_amp(i) = 0.0
-    z_from_bot(i) = 0.5*h(i,j,nz)
+    z_from_bot(i) = 0.5*dz(i,nz)
     do_i(i) = (G%mask2dT(i,j) > 0.0)
   enddo
   if (CS%use_tidal_mixing) call tidal_mixing_h_amp(h_amp, G, j, CS%tidal_mixing)
@@ -975,13 +984,13 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
   do k=nz,2,-1
     do_any = .false.
     do i=is,ie ; if (do_i(i)) then
-      dz_int = 0.5*(h(i,j,k) + h(i,j,k-1))
+      dz_int = 0.5*(dz(i,k) + dz(i,k-1))
       z_from_bot(i) = z_from_bot(i) + dz_int ! middle of the layer above
 
-      hb(i) = hb(i) + dz_int
+      hb(i) = hb(i) + 0.5*(h(i,j,k) + h(i,j,k-1))
       drho_bot(i) = drho_bot(i) + dRho_int(i,K)
 
-      if (z_from_bot(i) > GV%Z_to_H*h_amp(i)) then
+      if (z_from_bot(i) > h_amp(i)) then
         if (k>2) then
           ! Always include at least one full layer.
           hb(i) = hb(i) + 0.5*(h(i,j,k-1) + h(i,j,k-2))
@@ -999,20 +1008,20 @@ subroutine find_N2(h, tv, T_f, S_f, fluxes, j, G, GV, US, CS, dRho_int, &
     if (hb(i) > 0.0) then
       N2_bot(i) = (G_Rho0 * drho_bot(i)) / hb(i)
     else ;  N2_bot(i) = 0.0 ; endif
-    z_from_bot(i) = 0.5*h(i,j,nz)
+    z_from_bot(i) = 0.5*dz(i,nz)
     do_i(i) = (G%mask2dT(i,j) > 0.0)
   enddo
 
   do k=nz,2,-1
     do_any = .false.
     do i=is,ie ; if (do_i(i)) then
-      dz_int = 0.5*(h(i,j,k) + h(i,j,k-1))
+      dz_int = 0.5*(dz(i,k) + dz(i,k-1))
       z_from_bot(i) = z_from_bot(i) + dz_int ! middle of the layer above
 
       N2_int(i,K) = N2_bot(i)
       if (k>2) N2_lay(i,k-1) = N2_bot(i)
 
-      if (z_from_bot(i) > GV%Z_to_H*h_amp(i)) then
+      if (z_from_bot(i) > h_amp(i)) then
         if (k>2) N2_int(i,K-1) = N2_bot(i)
         do_i(i) = .false.
       else

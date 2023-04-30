@@ -16,6 +16,7 @@ use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,  only : forcing, extractFluxes1d, forcing_SinglePointPrint
 use MOM_grid,          only : ocean_grid_type
 use MOM_interpolate,   only : init_external_field, time_interp_external, time_interp_external_init
+use MOM_interface_heights, only : thickness_to_dz
 use MOM_io,            only : slasher
 use MOM_opacity,       only : set_opacity, opacity_CS, extract_optics_slice, extract_optics_fields
 use MOM_opacity,       only : optics_type, optics_nbands, absorbRemainingSW, sumSWoverBands
@@ -223,7 +224,7 @@ end subroutine make_frazil
 
 !> This subroutine applies double diffusion to T & S, assuming no diapycnal mass
 !! fluxes, using a simple tridiagonal solver.
-subroutine differential_diffuse_T_S(h, T, S, Kd_T, Kd_S, dt, G, GV)
+subroutine differential_diffuse_T_S(h, T, S, Kd_T, Kd_S, tv, dt, G, GV)
   type(ocean_grid_type),   intent(in)    :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in)    :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -233,13 +234,15 @@ subroutine differential_diffuse_T_S(h, T, S, Kd_T, Kd_S, dt, G, GV)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(inout) :: S    !< Salinity [PSU] or [gSalt/kg], generically [S ~> ppt].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), &
-                           intent(inout) :: Kd_T !< The extra diffusivity of temperature due to
+                           intent(in)    :: Kd_T !< The extra diffusivity of temperature due to
                                                  !! double diffusion relative to the diffusivity of
                                                  !! density [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), &
                            intent(in)    :: Kd_S !< The extra diffusivity of salinity due to
                                                  !! double diffusion relative to the diffusivity of
                                                  !! density [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
+  type(thermo_var_ptrs),   intent(in)    :: tv   !< Structure containing pointers to any
+                                                 !! available thermodynamic fields.
   real,                    intent(in)    :: dt   !<  Time increment [T ~> s].
 
   ! local variables
@@ -247,6 +250,7 @@ subroutine differential_diffuse_T_S(h, T, S, Kd_T, Kd_S, dt, G, GV)
     b1_T, b1_S, &   ! Variables used by the tridiagonal solvers of T & S [H ~> m or kg m-2].
     d1_T, d1_S      ! Variables used by the tridiagonal solvers [nondim].
   real, dimension(SZI_(G),SZK_(GV)) :: &
+    dz, &           ! Height change across layers [Z ~> m]
     c1_T, c1_S      ! Variables used by the tridiagonal solvers [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZK_(GV)+1) :: &
     mix_T, mix_S    ! Mixing distances in both directions across each interface [H ~> m or kg m-2].
@@ -254,20 +258,27 @@ subroutine differential_diffuse_T_S(h, T, S, Kd_T, Kd_S, dt, G, GV)
                     ! added to ensure positive definiteness [H ~> m or kg m-2].
   real :: h_neglect ! A thickness that is so small it is usually lost
                     ! in roundoff and can be neglected [H ~> m or kg m-2].
-  real :: I_h_int   ! The inverse of the thickness associated with an interface [H-1 ~> m-1 or m2 kg-1].
+  real :: dz_neglect ! A vertical distance that is so small it is usually lost
+                    ! in roundoff and can be neglected [Z ~> m].
+  real :: I_dz_int  ! The inverse of the height scale associated with an interface [Z-1 ~> m-1].
   real :: b_denom_T ! The first term in the denominator for the expression for b1_T [H ~> m or kg m-2].
   real :: b_denom_S ! The first term in the denominator for the expression for b1_S [H ~> m or kg m-2].
   integer :: i, j, k, is, ie, js, je, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   h_neglect = GV%H_subroundoff
+  dz_neglect = GV%dZ_subroundoff
 
   !$OMP parallel do default(private) shared(is,ie,js,je,h,h_neglect,dt,Kd_T,Kd_S,G,GV,T,S,nz)
   do j=js,je
+
+    ! Find the vertical distances across layers.
+    call thickness_to_dz(h, tv, dz, j, G, GV)
+
     do i=is,ie
-      I_h_int = 1.0 / (0.5 * (h(i,j,1) + h(i,j,2)) + h_neglect)
-      mix_T(i,2) = ((dt * Kd_T(i,j,2)) * GV%Z_to_H) * I_h_int
-      mix_S(i,2) = ((dt * Kd_S(i,j,2)) * GV%Z_to_H) * I_h_int
+      I_dz_int = 1.0 / (0.5 * (dz(i,1) + dz(i,2)) + dz_neglect)
+      mix_T(i,2) = (dt * Kd_T(i,j,2)) * I_dz_int
+      mix_S(i,2) = (dt * Kd_S(i,j,2)) * I_dz_int
 
       h_tr = h(i,j,1) + h_neglect
       b1_T(i) = 1.0 / (h_tr + mix_T(i,2))
@@ -279,9 +290,9 @@ subroutine differential_diffuse_T_S(h, T, S, Kd_T, Kd_S, dt, G, GV)
     enddo
     do k=2,nz-1 ; do i=is,ie
       ! Calculate the mixing across the interface below this layer.
-      I_h_int = 1.0 / (0.5 * (h(i,j,k) + h(i,j,k+1)) + h_neglect)
-      mix_T(i,K+1) = ((dt * Kd_T(i,j,K+1)) * GV%Z_to_H) * I_h_int
-      mix_S(i,K+1) = ((dt * Kd_S(i,j,K+1)) * GV%Z_to_H) * I_h_int
+      I_dz_int = 1.0 / (0.5 * (dz(i,k) + dz(i,k+1)) + dz_neglect)
+      mix_T(i,K+1) = ((dt * Kd_T(i,j,K+1))) * I_dz_int
+      mix_S(i,K+1) = ((dt * Kd_S(i,j,K+1))) * I_dz_int
 
       c1_T(i,k) = mix_T(i,K) * b1_T(i)
       c1_S(i,k) = mix_S(i,K) * b1_S(i)
@@ -888,16 +899,26 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
     PE_threshold(iM) = Mixing_Energy(iM) / (US%L_to_Z**2*GV%g_Earth)
   enddo
 
+  !### For efficiency, consider moving the calculate_density call outside of the i-loop.
+
   do j=js,je ; do i=is,ie
     if (G%mask2dT(i,j) > 0.0) then
 
       call calculate_density(tv%T(i,j,:), tv%S(i,j,:), pRef_MLD, rho_c, tv%eqn_of_state)
 
       Z_int(1) = 0.0
-      do k=1,nz
-        DZ(k) = h(i,j,k) * GV%H_to_Z
-        Z_int(K+1) = Z_int(K) - DZ(k)
-      enddo
+      ! Find the vertical distances across layers.  The first option is for non-Boussinesq mode.
+      if (allocated(tv%SpV_avg)) then
+        do k=1,nz
+          dZ(k) = GV%H_to_RZ * h(i,j,k) * tv%SpV_avg(i,j,k)
+          Z_int(K+1) = Z_int(K) - dZ(k)
+        enddo
+      else
+        do k=1,nz
+          dZ(k) = GV%H_to_Z * h(i,j,k)
+          Z_int(K+1) = Z_int(K) - dZ(k)
+        enddo
+      endif
 
       do iM=1,3
 

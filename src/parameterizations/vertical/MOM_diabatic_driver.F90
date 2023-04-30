@@ -43,7 +43,7 @@ use MOM_geothermal,          only : geothermal_init, geothermal_end, geothermal_
 use MOM_grid,                only : ocean_grid_type
 use MOM_int_tide_input,      only : set_int_tide_input, int_tide_input_init
 use MOM_int_tide_input,      only : int_tide_input_end, int_tide_input_CS, int_tide_input_type
-use MOM_interface_heights,   only : find_eta, calc_derived_thermo
+use MOM_interface_heights,   only : find_eta, calc_derived_thermo, thickness_to_dz
 use MOM_internal_tides,      only : propagate_int_tide
 use MOM_internal_tides,      only : internal_tides_init, internal_tides_end, int_tide_CS
 use MOM_kappa_shear,         only : kappa_shear_is_used
@@ -547,6 +547,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
   ! local variables
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     h_orig, &    ! Initial layer thicknesses [H ~> m or kg m-2]
+    dz,     &    ! The vertical distance between interfaces around a layer [Z ~> m]
     dSV_dT, &    ! The partial derivative of specific volume with temperature [R-1 C-1 ~> m3 kg-1 degC-1]
     dSV_dS, &    ! The partial derivative of specific volume with salinity [R-1 S-1 ~> m3 kg-1 ppt-1].
     cTKE,   &    ! convective TKE requirements for each layer [R Z3 T-2 ~> J m-2].
@@ -579,11 +580,11 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
                  ! sufficiently thick that the no-flux boundary conditions have not restricted
                  ! the entrainment - usually sqrt(Kd*dt).
 
-  real :: h_neglect    ! A thickness that is so small it is usually lost
-                       ! in roundoff and can be neglected [H ~> m or kg m-2]
-  real :: h_neglect2   ! h_neglect^2 [H2 ~> m2 or kg2 m-4]
+  real :: dz_neglect   ! A vertical distance that is so small it is usually lost
+                       ! in roundoff and can be neglected [Z ~> m]
+  real :: dz_neglect2  ! dz_neglect^2 [Z2 ~> m2]
   real :: add_ent      ! Entrainment that needs to be added when mixing tracers [H ~> m or kg m-2]
-  real :: I_hval       ! The inverse of the thicknesses averaged to interfaces [H-1 ~> m-1 or m2 kg-1]
+  real :: I_dzval      ! The inverse of the thicknesses averaged to interfaces [Z-1 ~> m-1]
   real :: Tr_ea_BBL    ! The diffusive tracer thickness in the BBL that is
                        ! coupled to the bottom within a timestep [H ~> m or kg m-2]
   real :: Kd_add_here    ! An added diffusivity [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
@@ -597,7 +598,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
 
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq  = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  h_neglect = GV%H_subroundoff ; h_neglect2 = h_neglect*h_neglect
+  dz_neglect = GV%dZ_subroundoff ; dz_neglect2 = dz_neglect*dz_neglect
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
 
   showCallTree = callTree_showQuery()
@@ -764,7 +765,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
   if (CS%double_diffuse .and. associated(tv%T)) then
 
     call cpu_clock_begin(id_clock_differential_diff)
-    call differential_diffuse_T_S(h, tv%T, tv%S, Kd_extra_T, Kd_extra_S, dt, G, GV)
+    call differential_diffuse_T_S(h, tv%T, tv%S, Kd_extra_T, Kd_extra_S, tv, dt, G, GV)
     call cpu_clock_end(id_clock_differential_diff)
 
     if (showCallTree) call callTree_waypoint("done with differential_diffuse_T_S (diabatic)")
@@ -788,15 +789,18 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     call calculate_CVMix_conv(h, tv, G, GV, US, CS%CVMix_conv, Hml, Kd_int, visc%Kv_shear)
   endif
 
+  ! Find the vertical distances across layers.
+  call thickness_to_dz(h, tv, dz, G, GV, US)
+
   ! This block sets ent_t and ent_s from h and Kd_int.
   do j=js,je ; do i=is,ie
     ent_s(i,j,1) = 0.0 ; ent_s(i,j,nz+1) = 0.0
     ent_t(i,j,1) = 0.0 ; ent_t(i,j,nz+1) = 0.0
   enddo ; enddo
-  !$OMP parallel do default(shared)  private(I_hval)
+  !$OMP parallel do default(shared)  private(I_dzval)
   do K=2,nz ; do j=js,je ; do i=is,ie
-    I_hval = 1.0 / (h_neglect + 0.5*(h(i,j,k-1) + h(i,j,k)))
-    ent_s(i,j,K) = GV%Z_to_H * dt * I_hval * Kd_int(i,j,K)
+    I_dzval = 1.0 / (dz_neglect + 0.5*(dz(i,j,k-1) + dz(i,j,k)))
+    ent_s(i,j,K) = dt * I_dzval * Kd_int(i,j,K)
     ent_t(i,j,K) = ent_s(i,j,K)
   enddo ; enddo ; enddo
   if (showCallTree) call callTree_waypoint("done setting ent_s and ent_t from Kd_int (diabatic)")
@@ -855,6 +859,9 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
       call pass_var(visc%MLD, G%domain, halo=1)
     endif
 
+    ! Find the vertical distances across layers, which may have been modified by the net surface flux
+    call thickness_to_dz(h, tv, dz, G, GV, US)
+
     ! Augment the diffusivities and viscosity due to those diagnosed in energetic_PBL.
     do K=2,nz ; do j=js,je ; do i=is,ie
       if (CS%ePBL_is_additive) then
@@ -865,7 +872,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
         visc%Kv_shear(i,j,K) = max(visc%Kv_shear(i,j,K), CS%ePBL_Prandtl*Kd_ePBL(i,j,K))
       endif
 
-      Ent_int = Kd_add_here * (GV%Z_to_H * dt) / (0.5*(h(i,j,k-1) + h(i,j,k)) + h_neglect)
+      Ent_int = Kd_add_here * dt / (0.5*(dz(i,j,k-1) + dz(i,j,k)) + dz_neglect)
       ent_s(i,j,K) = ent_s(i,j,K) + Ent_int
       Kd_int(i,j,K) = Kd_int(i,j,K) + Kd_add_here
 
@@ -885,6 +892,9 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     call applyBoundaryFluxesInOut(CS%diabatic_aux_CSp, G, GV, US, dt, fluxes, CS%optics, &
                                   optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, &
                                   CS%evap_CFL_limit, CS%minimum_forcing_depth)
+
+    ! Find the vertical distances across layers, which may have been modified by the net surface flux
+    call thickness_to_dz(h, tv, dz, G, GV, US)
 
   endif   ! endif for CS%use_energetic_PBL
 
@@ -1030,8 +1040,8 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
           ! in the calculation of the fluxes in the first place.  Kd_min_tr
           ! should be much less than the values that have been set in Kd_int,
           ! perhaps a molecular diffusivity.
-          add_ent = ((dt * CS%Kd_min_tr) * GV%Z_to_H) * &
-                    ((h(i,j,k-1)+h(i,j,k)+h_neglect) /  (h(i,j,k-1)*h(i,j,k)+h_neglect2)) - &
+          add_ent = ((dt * CS%Kd_min_tr)) * &
+                    ((dz(i,j,k-1)+dz(i,j,k)+dz_neglect) /  (dz(i,j,k-1)*dz(i,j,k)+dz_neglect2)) - &
                     0.5*(ent_s(i,j,K) + ent_s(i,j,K))
           if (htot(i) < Tr_ea_BBL) then
             add_ent = max(0.0, add_ent, (Tr_ea_BBL - htot(i)) - ent_s(i,j,K))
@@ -1043,8 +1053,8 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
         endif
 
         if (CS%double_diffuse) then ; if (Kd_extra_S(i,j,k) > 0.0) then
-          add_ent = ((dt * Kd_extra_S(i,j,k)) * GV%Z_to_H) / &
-                    (0.5 * (h(i,j,k-1) + h(i,j,k)) +  h_neglect)
+          add_ent = (dt * Kd_extra_S(i,j,k)) / &
+                    (0.5 * (dz(i,j,k-1) + dz(i,j,k)) +  dz_neglect)
           ent_s(i,j,K) = ent_s(i,j,K) + add_ent
         endif ; endif
       enddo ; enddo
@@ -1054,8 +1064,8 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     !$OMP parallel do default(shared) private(add_ent)
     do k=nz,2,-1 ; do j=js,je ; do i=is,ie
       if (Kd_extra_S(i,j,k) > 0.0) then
-        add_ent = ((dt * Kd_extra_S(i,j,k)) * GV%Z_to_H) / &
-                  (0.5 * (h(i,j,k-1) + h(i,j,k)) + h_neglect)
+        add_ent = (dt * Kd_extra_S(i,j,k)) / &
+                  (0.5 * (dz(i,j,k-1) + dz(i,j,k)) + dz_neglect)
       else
         add_ent = 0.0
       endif
@@ -1135,6 +1145,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
   ! local variables
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     h_orig, &    ! Initial layer thicknesses [H ~> m or kg m-2]
+    dz,     &    ! The vertical distance between interfaces around a layer [Z ~> m]
     dSV_dT, &    ! The partial derivative of specific volume with temperature [R-1 C-1 ~> m3 kg-1 degC-1]
     dSV_dS, &    ! The partial derivative of specific volume with salinity [R-1 S-1 ~> m3 kg-1 ppt-1].
     cTKE,   &    ! convective TKE requirements for each layer [R Z3 T-2 ~> J m-2].
@@ -1167,11 +1178,11 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
                  ! sufficiently thick that the no-flux boundary conditions have not restricted
                  ! the entrainment - usually sqrt(Kd*dt).
 
-  real :: h_neglect    ! A thickness that is so small it is usually lost
-                       ! in roundoff and can be neglected [H ~> m or kg m-2]
-  real :: h_neglect2   ! h_neglect^2 [H2 ~> m2 or kg2 m-4]
+  real :: dz_neglect   ! A vertical distance that is so small it is usually lost
+                       ! in roundoff and can be neglected [Z ~> m]
+  real :: dz_neglect2  ! dz_neglect^2 [Z2 ~> m2]
   real :: add_ent      ! Entrainment that needs to be added when mixing tracers [H ~> m or kg m-2]
-  real :: I_hval       ! The inverse of the thicknesses averaged to interfaces [H-1 ~> m-1 or m2 kg-1]
+  real :: I_dzval      ! The inverse of the thicknesses averaged to interfaces [Z-1 ~> m-1]
   real :: Tr_ea_BBL    ! The diffusive tracer thickness in the BBL that is
                        ! coupled to the bottom within a timestep [H ~> m or kg m-2]
   real :: htot(SZIB_(G)) ! The summed thickness from the bottom [H ~> m or kg m-2].
@@ -1183,7 +1194,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
 
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq  = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  h_neglect = GV%H_subroundoff ; h_neglect2 = h_neglect*h_neglect
+  dz_neglect = GV%dZ_subroundoff ; dz_neglect2 = dz_neglect*dz_neglect
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
   ent_s(:,:,:) = 0.0 ; ent_t(:,:,:) = 0.0
 
@@ -1465,17 +1476,20 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
       enddo ; enddo ; enddo
     endif
 
+    ! Find the vertical distances across layers, which may have been modified by the net surface flux
+    call thickness_to_dz(h, tv, dz, G, GV, US)
+
     ! set ent_t=dt*Kd_heat/h_int and est_s=dt*Kd_salt/h_int on interfaces for use in the tridiagonal solver.
     do j=js,je ; do i=is,ie
       ent_t(i,j,1) = 0. ; ent_t(i,j,nz+1) = 0.
       ent_s(i,j,1) = 0. ; ent_s(i,j,nz+1) = 0.
     enddo ; enddo
 
-    !$OMP parallel do default(shared) private(I_hval)
+    !$OMP parallel do default(shared) private(I_dzval)
     do K=2,nz ; do j=js,je ; do i=is,ie
-      I_hval = 1.0 / (h_neglect + 0.5*(h(i,j,k-1) + h(i,j,k)))
-      ent_t(i,j,K) = GV%Z_to_H * dt * I_hval * Kd_heat(i,j,k)
-      ent_s(i,j,K) = GV%Z_to_H * dt * I_hval * Kd_salt(i,j,k)
+      I_dzval = 1.0 / (dz_neglect + 0.5*(dz(i,j,k-1) + dz(i,j,k)))
+      ent_t(i,j,K) = dt * I_dzval * Kd_heat(i,j,k)
+      ent_s(i,j,K) = dt * I_dzval * Kd_salt(i,j,k)
     enddo ; enddo ; enddo
     if (showCallTree) call callTree_waypoint("done setting ent_t and ent_t from Kd_heat and " //&
                                              "Kd_salt (diabatic_ALE)")
@@ -1555,8 +1569,8 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
           ! bottom, add some mixing of tracers between these layers.  This flux is based on the
           ! harmonic mean of the two thicknesses, following what is done in layered mode. Kd_min_tr
           ! should be much less than the values in Kd_salt, perhaps a molecular diffusivity.
-          add_ent = ((dt * CS%Kd_min_tr) * GV%Z_to_H) * &
-                    ((h(i,j,k-1)+h(i,j,k) + h_neglect) /  (h(i,j,k-1)*h(i,j,k) + h_neglect2)) - &
+          add_ent = (dt * CS%Kd_min_tr) * &
+                    ((dz(i,j,k-1)+dz(i,j,k) + dz_neglect) /  (dz(i,j,k-1)*dz(i,j,k) + dz_neglect2)) - &
                     ent_s(i,j,K)
           if (htot(i) < Tr_ea_BBL) then
             add_ent = max(0.0, add_ent, (Tr_ea_BBL - htot(i)) - ent_s(i,j,K))
@@ -1649,8 +1663,11 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
                  ! one time step [H ~> m or kg m-2]
     Kd_lay, &    ! diapycnal diffusivity of layers [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
     h_orig, &    ! initial layer thicknesses [H ~> m or kg m-2]
+    dz,     &    ! The vertical distance between interfaces around a layer [Z ~> m]
     hold,   &    ! layer thickness before diapycnal entrainment, and later the initial
                  ! layer thicknesses (if a mixed layer is used) [H ~> m or kg m-2]
+    dz_old, &    ! The initial vertical distance between interfaces around a layer
+                 ! or the distance before entrainment [Z ~> m]
     u_h,    &    ! Zonal velocities at thickness points after entrainment [L T-1 ~> m s-1]
     v_h,    &    ! Meridional velocities at thickness points after entrainment [L T-1 ~> m s-1]
     temp_diag, & ! Diagnostic array of previous temperatures [C ~> degC]
@@ -1698,7 +1715,9 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
 
   real :: h_neglect    ! A thickness that is so small it is usually lost
                        ! in roundoff and can be neglected [H ~> m or kg m-2]
-  real :: h_neglect2   ! h_neglect^2 [H2 ~> m2 or kg2 m-4]
+  real :: dz_neglect   ! A vertical distance that is so small it is usually lost
+                       ! in roundoff and can be neglected [Z ~> m]
+  real :: dz_neglect2  ! dz_neglect^2 [Z2 ~> m2]
   real :: net_ent      ! The net of ea-eb at an interface [H ~> m or kg m-2]
   real :: add_ent      ! Entrainment that needs to be added when mixing tracers [H ~> m or kg m-2]
   real :: eaval        ! eaval is 2*ea at velocity grid points [H ~> m or kg m-2]
@@ -1725,7 +1744,8 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq  = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   nkmb = GV%nk_rho_varies
-  h_neglect = GV%H_subroundoff ; h_neglect2 = h_neglect*h_neglect
+  h_neglect = GV%H_subroundoff
+  dz_neglect = GV%dZ_subroundoff ; dz_neglect2 = dz_neglect*dz_neglect
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
 
 
@@ -1970,7 +1990,7 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
   if (CS%double_diffuse .and. associated(tv%T)) then
 
     call cpu_clock_begin(id_clock_differential_diff)
-    call differential_diffuse_T_S(h, tv%T, tv%S, Kd_extra_T, Kd_extra_S, dt, G, GV)
+    call differential_diffuse_T_S(h, tv%T, tv%S, Kd_extra_T, Kd_extra_S, tv, dt, G, GV)
     call cpu_clock_end(id_clock_differential_diff)
     if (showCallTree) call callTree_waypoint("done with differential_diffuse_T_S (diabatic)")
     if (CS%debugConservation) call MOM_state_stats('differential_diffuse_T_S', u, v, h, tv%T, tv%S, G, GV, US)
@@ -2297,6 +2317,13 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
 
   ! mixing of passive tracers from massless boundary layers to interior
   call cpu_clock_begin(id_clock_tracers)
+
+  ! Find the vertical distances across layers.
+  if (CS%mix_boundary_tracers .or. CS%double_diffuse) &
+    call thickness_to_dz(h, tv, dz, G, GV, US)
+  if (CS%double_diffuse) &
+    call thickness_to_dz(hold, tv, dz_old, G, GV, US)
+
   if (CS%mix_boundary_tracers) then
     Tr_ea_BBL = sqrt((dt * CS%Kd_BBL_tr) * GV%Z_to_H)
     !$OMP parallel do default(shared) private(htot,in_boundary,add_ent)
@@ -2317,9 +2344,9 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
           ! in the calculation of the fluxes in the first place.  Kd_min_tr
           ! should be much less than the values that have been set in Kd_lay,
           ! perhaps a molecular diffusivity.
-          add_ent = ((dt * CS%Kd_min_tr) * GV%Z_to_H) * &
-                    ((h(i,j,k-1)+h(i,j,k)+h_neglect) / &
-                     (h(i,j,k-1)*h(i,j,k)+h_neglect2)) - &
+          add_ent = (dt * CS%Kd_min_tr) * &
+                    ((dz(i,j,k-1) + dz(i,j,k) + dz_neglect) / &
+                     (dz(i,j,k-1)*dz(i,j,k) + dz_neglect2)) - &
                     0.5*(ea(i,j,k) + eb(i,j,k-1))
           if (htot(i) < Tr_ea_BBL) then
             add_ent = max(0.0, add_ent, &
@@ -2334,8 +2361,8 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
           ebtr(i,j,k-1) = eb(i,j,k-1) ; eatr(i,j,k) = ea(i,j,k)
         endif
         if (CS%double_diffuse) then ; if (Kd_extra_S(i,j,K) > 0.0) then
-          add_ent = ((dt * Kd_extra_S(i,j,K)) * GV%Z_to_H) / &
-             (0.25 * ((h(i,j,k-1) + h(i,j,k)) + (hold(i,j,k-1) + hold(i,j,k))) + h_neglect)
+          add_ent = (dt * Kd_extra_S(i,j,K)) / &
+             (0.25 * ((dz(i,j,k-1) + dz(i,j,k)) + (dz_old(i,j,k-1) + dz_old(i,j,k))) + dz_neglect)
           ebtr(i,j,k-1) = ebtr(i,j,k-1) + add_ent
           eatr(i,j,k) = eatr(i,j,k) + add_ent
         endif ; endif
@@ -2357,9 +2384,9 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
     !$OMP parallel do default(shared) private(add_ent)
     do k=nz,2,-1 ; do j=js,je ; do i=is,ie
       if (Kd_extra_S(i,j,K) > 0.0) then
-        add_ent = ((dt * Kd_extra_S(i,j,K)) * GV%Z_to_H) / &
-           (0.25 * ((h(i,j,k-1) + h(i,j,k)) + (hold(i,j,k-1) + hold(i,j,k))) + &
-            h_neglect)
+        add_ent = (dt * Kd_extra_S(i,j,K)) / &
+           (0.25 * ((dz(i,j,k-1) + dz(i,j,k)) + (dz_old(i,j,k-1) + dz_old(i,j,k))) + &
+            dz_neglect)
       else
         add_ent = 0.0
       endif
