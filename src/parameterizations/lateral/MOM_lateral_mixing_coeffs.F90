@@ -684,7 +684,7 @@ subroutine calc_Eady_growth_rate_2D(CS, G, GV, US, h, e, dzu, dzv, dzSxN, dzSyN,
   integer :: i, j, k, l_seg
   logical :: crop
 
-  dz_neglect = GV%H_subroundoff * GV%H_to_Z
+  dz_neglect = GV%dZ_subroundoff
   D_scale = CS%Eady_GR_D_scale
   if (D_scale<=0.) D_scale = 64.*GV%max_depth ! 0 means use full depth so choose something big
   r_crp_dist = 1. / max( dz_neglect, CS%cropping_distance )

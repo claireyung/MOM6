@@ -765,7 +765,7 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
   G_scale = GV%g_Earth * GV%H_to_Z
 
   h_neglect = GV%H_subroundoff ; h_neglect2 = h_neglect**2
-  dz_neglect = GV%H_subroundoff*GV%H_to_Z
+  dz_neglect = GV%dZ_subroundoff
   G_rho0 = GV%g_Earth / GV%Rho0
   N2_floor = CS%N2_floor * US%Z_to_L**2
   FGNV_rescale = CS%FGNV_scale*GV%Z_to_H**2

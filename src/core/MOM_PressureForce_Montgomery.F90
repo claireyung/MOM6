@@ -436,7 +436,7 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pbce,
       "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
   endif
 
-  h_neglect = GV%H_subroundoff * GV%H_to_Z
+  h_neglect = GV%dZ_subroundoff
   I_Rho0 = 1.0/CS%Rho0
   G_Rho0 = GV%g_Earth / GV%Rho0
 
@@ -647,7 +647,7 @@ subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, rho_star)
   Rho0xG = Rho0 * GV%g_Earth
   G_Rho0 = GV%g_Earth / GV%Rho0
   use_EOS = associated(tv%eqn_of_state)
-  z_neglect = GV%H_subroundoff*GV%H_to_Z
+  z_neglect = GV%dZ_subroundoff
 
   if (use_EOS) then
     if (present(rho_star)) then

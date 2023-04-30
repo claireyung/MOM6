@@ -2071,7 +2071,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
                  "length scale.", default=.false.)
   if (CS%ML_radiation) then
     ! This give a minimum decay scale that is typically much less than Angstrom.
-    CS%ustar_min = 2e-4 * CS%omega * (GV%Angstrom_Z + GV%H_subroundoff*GV%H_to_Z)
+    CS%ustar_min = 2e-4 * CS%omega * (GV%Angstrom_Z + GV%dZ_subroundoff)
 
     call get_param(param_file, mdl, "ML_RAD_EFOLD_COEFF", CS%ML_rad_efold_coeff, &
                  "A coefficient that is used to scale the penetration "//&

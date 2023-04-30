@@ -2136,7 +2136,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                  "The rotation rate of the earth.", &
                  units="s-1", default=7.2921e-5, scale=US%T_to_s)
     ! This give a minimum decay scale that is typically much less than Angstrom.
-    CS%ustar_min = 2e-4*CS%omega*(GV%Angstrom_Z + GV%H_to_Z*GV%H_subroundoff)
+    CS%ustar_min = 2e-4*CS%omega*(GV%Angstrom_Z + GV%dZ_subroundoff)
   else
     call get_param(param_file, mdl, "OMEGA", CS%omega, &
                  "The rotation rate of the earth.", &

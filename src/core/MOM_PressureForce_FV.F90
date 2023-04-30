@@ -519,7 +519,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   if (associated(ALE_CSp)) use_ALE = CS%reconstruct .and. use_EOS
 
   h_neglect = GV%H_subroundoff
-  dz_neglect = GV%H_subroundoff * GV%H_to_Z
+  dz_neglect = GV%dZ_subroundoff
   I_Rho0 = 1.0 / GV%Rho0
   G_Rho0 = GV%g_Earth / GV%Rho0
   rho_ref = CS%Rho0

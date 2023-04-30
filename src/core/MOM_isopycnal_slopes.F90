@@ -142,7 +142,7 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
 
 
   h_neglect = GV%H_subroundoff ; h_neglect2 = h_neglect**2
-  dz_neglect = GV%H_subroundoff * GV%H_to_Z
+  dz_neglect = GV%dZ_subroundoff
 
   local_open_u_BC = .false.
   local_open_v_BC = .false.

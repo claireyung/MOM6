@@ -2322,7 +2322,7 @@ subroutine energetic_PBL_init(Time, G, GV, US, param_file, diag, CS)
 
 !/ Logging parameters
   ! This gives a minimum decay scale that is typically much less than Angstrom.
-  CS%ustar_min = 2e-4*CS%omega*(GV%Angstrom_Z + GV%H_to_Z*GV%H_subroundoff)
+  CS%ustar_min = 2e-4*CS%omega*(GV%Angstrom_Z + GV%dZ_subroundoff)
   call log_param(param_file, mdl, "!EPBL_USTAR_MIN", CS%ustar_min, &
                  "The (tiny) minimum friction velocity used within the "//&
                  "ePBL code, derived from OMEGA and ANGSTROM.", &

@@ -785,7 +785,7 @@ subroutine MEKE_equilibrium(CS, MEKE, G, GV, US, SN_u, SN_v, drag_rate_visc, I_m
   Ubg2 = CS%MEKE_Uscale**2
   cd2 = CS%cdrag**2
   tolerance = 1.0e-12*US%m_s_to_L_T**2
-  dZ_neglect = GV%H_to_Z*GV%H_subroundoff
+  dZ_neglect = GV%dZ_subroundoff
 
 !$OMP do
   do j=js,je ; do i=is,ie
@@ -965,7 +965,7 @@ subroutine MEKE_lengthScales(CS, MEKE, G, GV, US, SN_u, SN_v, EKE, depth_tot, &
   integer :: i, j, is, ie, js, je
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  dZ_neglect = GV%H_to_Z*GV%H_subroundoff
+  dZ_neglect = GV%dZ_subroundoff
 
 !$OMP do
   do j=js,je ; do i=is,ie

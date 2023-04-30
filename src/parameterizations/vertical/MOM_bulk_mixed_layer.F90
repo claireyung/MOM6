@@ -3505,7 +3505,7 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
                  "layers before sorting when ML_RESORT is true.", &
                  units="nondim", default=0, fail_if_missing=.true.) ! Fail added by AJA.
   ! This gives a minimum decay scale that is typically much less than Angstrom.
-  ustar_min_dflt = 2e-4*CS%omega*(GV%Angstrom_Z + GV%H_to_Z*GV%H_subroundoff)
+  ustar_min_dflt = 2e-4*CS%omega*(GV%Angstrom_Z + GV%dZ_subroundoff)
   call get_param(param_file, mdl, "BML_USTAR_MIN", CS%ustar_min, &
                  "The minimum value of ustar that should be used by the "//&
                  "bulk mixed layer model in setting vertical TKE decay "//&

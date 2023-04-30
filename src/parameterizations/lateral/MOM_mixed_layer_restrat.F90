@@ -1029,7 +1029,7 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
   call get_param(param_file, mdl, "OMEGA", omega, &
                  "The rotation rate of the earth.", &
                  units="s-1", default=7.2921e-5, scale=US%T_to_s)
-  ustar_min_dflt = 2.0e-4 * omega * (GV%Angstrom_Z + GV%H_to_Z*GV%H_subroundoff)
+  ustar_min_dflt = 2.0e-4 * omega * (GV%Angstrom_Z + GV%dZ_subroundoff)
   call get_param(param_file, mdl, "RESTRAT_USTAR_MIN", CS%ustar_min, &
                  "The minimum value of ustar that will be used by the mixed layer "//&
                  "restratification module.  This can be tiny, but if this is greater than 0, "//&
