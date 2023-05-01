@@ -849,9 +849,9 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G),3) :: MLD  ! Diagnosed mixed layer depth [Z ~> m].
   real, dimension(SZK_(GV)+1) :: Z_int    ! Depths of the interfaces from the surface [Z ~> m]
-  real, dimension(SZK_(GV)) :: dZ         ! Layer thicknesses in depth units [Z ~> m]
-  real, dimension(SZK_(GV)) :: Rho_c      ! A column of layer densities [R ~> kg m-3]
-  real, dimension(SZK_(GV)) :: pRef_MLD   ! The reference pressure for the mixed layer
+  real, dimension(SZI_(G),SZK_(GV)) :: dZ ! Layer thicknesses in depth units [Z ~> m]
+  real, dimension(SZI_(G),SZK_(GV)) :: Rho_c ! Columns of layer densities [R ~> kg m-3]
+  real, dimension(SZI_(G)) :: pRef_MLD   ! The reference pressure for the mixed layer
                                           ! depth calculation [R L2 T-2 ~> Pa]
   real, dimension(3) :: PE_threshold      ! The energy threshold divided by g [R Z2 ~> kg m-1]
 
@@ -886,6 +886,7 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
   real :: Fgx        ! The mixing energy difference from the target [R Z2 ~> kg m-1]
   real :: Fpx        ! The derivative of Fgx with x  [R Z ~> kg m-2]
 
+  integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: IT, iM
   integer :: i, j, is, ie, js, je, k, nz
 
@@ -899,26 +900,24 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
     PE_threshold(iM) = Mixing_Energy(iM) / (US%L_to_Z**2*GV%g_Earth)
   enddo
 
-  !### For efficiency, consider moving the calculate_density call outside of the i-loop.
+  MLD(:,:,:) = 0.0
 
-  do j=js,je ; do i=is,ie
-    if (G%mask2dT(i,j) > 0.0) then
+  EOSdom(:) = EOS_domain(G%HI)
 
-      call calculate_density(tv%T(i,j,:), tv%S(i,j,:), pRef_MLD, rho_c, tv%eqn_of_state)
+  do j=js,je
+    ! Find the vertical distances across layers.
+    call thickness_to_dz(h, tv, dz, j, G, GV)
+
+    do k=1,nz
+      call calculate_density(tv%T(:,j,k), tv%S(:,j,K), pRef_MLD, rho_c(:,k), tv%eqn_of_state, EOSdom)
+    enddo
+
+    do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
 
       Z_int(1) = 0.0
-      ! Find the vertical distances across layers.  The first option is for non-Boussinesq mode.
-      if (allocated(tv%SpV_avg)) then
-        do k=1,nz
-          dZ(k) = GV%H_to_RZ * h(i,j,k) * tv%SpV_avg(i,j,k)
-          Z_int(K+1) = Z_int(K) - dZ(k)
-        enddo
-      else
-        do k=1,nz
-          dZ(k) = GV%H_to_Z * h(i,j,k)
-          Z_int(K+1) = Z_int(K) - dZ(k)
-        enddo
-      endif
+      do k=1,nz
+        Z_int(K+1) = Z_int(K) - dZ(i,k)
+      enddo
 
       do iM=1,3
 
@@ -933,11 +932,11 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
         do k=1,nz
 
           ! This is the unmixed PE cumulative sum from top down
-          PE = PE + 0.5 * rho_c(k) * (Z_int(K)**2 - Z_int(K+1)**2)
+          PE = PE + 0.5 * Rho_c(i,k) * (Z_int(K)**2 - Z_int(K+1)**2)
 
           ! This is the depth and integral of density
-          H_ML_TST = H_ML + DZ(k)
-          RhoDZ_ML_TST = RhoDZ_ML + rho_c(k) * DZ(k)
+          H_ML_TST = H_ML + dZ(i,k)
+          RhoDZ_ML_TST = RhoDZ_ML + Rho_c(i,k) * dZ(i,k)
 
           ! The average density assuming all layers including this were mixed
           Rho_ML = RhoDZ_ML_TST/H_ML_TST
@@ -957,8 +956,8 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
 
             R1 = RhoDZ_ML / H_ML ! The density of the mixed layer (not including this layer)
             D1 = H_ML ! The thickness of the mixed layer (not including this layer)
-            R2 = rho_c(k) ! The density of this layer
-            D2 = DZ(k) ! The thickness of this layer
+            R2 = Rho_c(i,k) ! The density of this layer
+            D2 = dZ(i,k) ! The thickness of this layer
 
             ! This block could be used to calculate the function coefficients if
             ! we don't reference all values to a surface designated as z=0
@@ -985,7 +984,7 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
             Cc2 = R2 * (D - C)
 
             ! First guess for an iteration using Newton's method
-            X = DZ(k) * 0.5
+            X = dZ(i,k) * 0.5
 
             IT=0
             do while(IT<10)!We can iterate up to 10 times
@@ -1017,7 +1016,7 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
               if (abs(Fgx) > PE_Threshold(iM) * PE_Threshold_fraction) then
                 X2 = X - Fgx / Fpx
                 IT = IT + 1
-                if (X2 < 0. .or. X2 > DZ(k)) then
+                if (X2 < 0. .or. X2 > dZ(i,k)) then
                   ! The iteration seems to be robust, but we need to do something *if*
                   ! things go wrong... How should we treat failed iteration?
                   ! Present solution: Stop trying to compute and just say we can't mix this layer.
@@ -1036,10 +1035,8 @@ subroutine diagnoseMLDbyEnergy(id_MLD, h, tv, G, GV, US, Mixing_Energy, diagPtr)
         enddo
         MLD(i,j,iM) = H_ML
       enddo
-    else
-      MLD(i,j,:) = 0.0
-    endif
-  enddo ; enddo
+    endif ; enddo
+  enddo
 
   if (id_MLD(1) > 0) call post_data(id_MLD(1), MLD(:,:,1), diagPtr)
   if (id_MLD(2) > 0) call post_data(id_MLD(2), MLD(:,:,2), diagPtr)
