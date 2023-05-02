@@ -45,7 +45,7 @@ public updateCFLtruncationValue
 !> The control structure with parameters and memory for the MOM_vert_friction module
 type, public :: vertvisc_CS ; private
   logical :: initialized = .false. !< True if this control structure has been initialized.
-  real    :: Hmix            !< The mixed layer thickness in thickness units [H ~> m or kg m-2].
+  real    :: Hmix            !< The mixed layer thickness [Z ~> m].
   real    :: Hmix_stress     !< The mixed layer thickness over which the wind
                              !! stress is applied with direct_stress [H ~> m or kg m-2].
   real    :: Kvml_invZ2      !< The extra vertical viscosity scale in [H Z T-1 ~> m2 s-1 or Pa s] in a
@@ -53,8 +53,8 @@ type, public :: vertvisc_CS ; private
                              !! and scaling proportional to (Hmix/z)^2, where z is the distance
                              !! from the surface; this can get very large with thin layers.
   real    :: Kv              !< The interior vertical viscosity [H Z T-1 ~> m2 s-1 or Pa s].
-  real    :: Hbbl            !< The static bottom boundary layer thickness [H ~> m or kg m-2].
-  real    :: Hbbl_gl90       !< The static bottom boundary layer thickness used for GL90 [H ~> m or kg m-2].
+  real    :: Hbbl            !< The static bottom boundary layer thickness [Z ~> m].
+  real    :: Hbbl_gl90       !< The static bottom boundary layer thickness used for GL90 [Z ~> m].
   real    :: Kv_extra_bbl    !< An extra vertical viscosity in the bottom boundary layer of thickness
                              !! Hbbl when there is not a bottom drag law in use [H Z T-1 ~> m2 s-1 or Pa s].
   real    :: vonKar          !< The von Karman constant as used for mixed layer viscosity [nondim]
@@ -204,8 +204,8 @@ contains
 subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, do_i, z_i, j, G, GV, CS, VarMix, work_on_u)
   type(ocean_grid_type),                        intent(in)    :: G   !< Grid structure.
   type(verticalGrid_type),                      intent(in)    :: GV  !< Vertical grid structure.
-  real, dimension(SZIB_(G),SZK_(GV)),           intent(in)    :: hvel   !< Layer thickness used at a velocity
-                                                                     !! grid point [H ~> m or kg m-2].
+  real, dimension(SZIB_(G),SZK_(GV)),           intent(in)    :: hvel !< Distance between interfaces
+                                                                     !! at velocity points [Z ~> m]
   logical, dimension(SZIB_(G)),                 intent(in)    :: do_i !< If true, determine coupling coefficient
                                                                      !!  for a column
   real, dimension(SZIB_(G),SZK_(GV)+1),         intent(in)    :: z_i  !< Estimate of interface heights above the
@@ -224,8 +224,8 @@ subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, do_i, z_i, j, G, GV, CS, Va
   logical :: kdgl90_use_ebt_struct
   integer :: i, k, is, ie, nz, Isq, Ieq
   real    :: f2         !< Squared Coriolis parameter at a velocity grid point [T-2 ~> s-2].
-  real    :: h_neglect  ! A thickness that is so small it is usually lost in roundoff error
-                        ! and can be neglected [H ~> m or kg m-2].
+  real    :: h_neglect  ! A vertical distance that is so small it is usually lost in roundoff error
+                        ! and can be neglected [Z ~> m].
   real    :: botfn      ! A function that is 1 at the bottom and small far from it [nondim]
   real    :: z2         ! The distance from the bottom, normalized by Hbbl_gl90 [nondim]
 
@@ -233,7 +233,7 @@ subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, do_i, z_i, j, G, GV, CS, Va
   Isq = G%IscB ; Ieq = G%IecB
   nz = GV%ke
 
-  h_neglect = GV%H_subroundoff
+  h_neglect = GV%dZ_subroundoff
   kdgl90_use_ebt_struct = .false.
   if (VarMix%use_variable_mixing) then
     kdgl90_use_ebt_struct = VarMix%kdgl90_use_ebt_struct
@@ -925,7 +925,7 @@ end subroutine vertvisc_remnant
 !> Calculate the coupling coefficients (CS%a_u, CS%a_v, CS%a_u_gl90, CS%a_v_gl90)
 !! and effective layer thicknesses (CS%h_u and CS%h_v) for later use in the
 !! applying the implicit vertical viscosity via vertvisc().
-subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
+subroutine vertvisc_coef(u, v, h, dz, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
@@ -935,6 +935,8 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
                            intent(in)    :: v      !< Meridional velocity [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(in)    :: h      !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in)    :: dz     !< Vertical distance across layers [Z ~> m]
   type(mech_forcing),      intent(in)    :: forces !< A structure with the driving mechanical forces
   type(vertvisc_type),     intent(in)    :: visc   !< Viscosities and bottom drag
   real,                    intent(in)    :: dt     !< Time increment [T ~> s]
@@ -953,7 +955,12 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
     h_arith, &  ! The arithmetic mean thickness [H ~> m or kg m-2].
     h_delta, &  ! The lateral difference of thickness [H ~> m or kg m-2].
     hvel, &     ! hvel is the thickness used at a velocity grid point [H ~> m or kg m-2].
-    hvel_shelf  ! The equivalent of hvel under shelves [H ~> m or kg m-2].
+    hvel_shelf, & ! The equivalent of hvel under shelves [H ~> m or kg m-2].
+    dz_harm, &  ! Harmonic mean of the vertical distances around a velocity grid point,
+                ! given by 2*(h+ * h-)/(h+ + h-) [Z ~> m].
+    dz_arith, & ! The arithmetic mean of the vertical distances around a velocity grid point [Z ~> m]
+    dz_vel, &   ! The vertical distance between interfaces used at a velocity grid point [Z ~> m].
+    dz_vel_shelf ! The equivalent of dz_vel under shelves [Z ~> m].
   real, dimension(SZIB_(G),SZK_(GV)+1) :: &
     a_cpl, &    ! The drag coefficients across interfaces [H T-1 ~> m s-1 or Pa s m-1].  a_cpl times
                 ! the velocity difference gives the stress across an interface.
@@ -968,21 +975,20 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
                 ! normalized by the GL90 bottom boundary layer thickness [nondim]
   real, dimension(SZIB_(G)) :: &
     kv_bbl, &     ! The bottom boundary layer viscosity [H Z T-1 ~> m2 s-1 or Pa s].
-    bbl_thick, &  ! The bottom boundary layer thickness [H ~> m or kg m-2].
-    I_Hbbl, &     ! The inverse of the bottom boundary layer thickness [H-1 ~> m-1 or m2 kg-1].
+    bbl_thick, &  ! The bottom boundary layer thickness [Z ~> m].
+    I_Hbbl, &     ! The inverse of the bottom boundary layer thickness [Z-1 ~> m-1].
     I_Hbbl_gl90, &! The inverse of the bottom boundary layer thickness used for the GL90 scheme
-                  ! [H-1 ~> m-1 or m2 kg-1].
-    I_Htbl, &     ! The inverse of the top boundary layer thickness [H-1 ~> m-1 or m2 kg-1].
-    zcol1, &      ! The height of the interfaces to the south of a v-point [H ~> m or kg m-2].
-    zcol2, &      ! The height of the interfaces to the north of a v-point [H ~> m or kg m-2].
-    Ztop_min, &   ! The deeper of the two adjacent surface heights [H ~> m or kg m-2].
-    Dmin, &       ! The shallower of the two adjacent bottom depths converted to
-                  ! thickness units [H ~> m or kg m-2].
+                  ! [Z-1 ~> m-1].
+    I_HTbl, &     ! The inverse of the top boundary layer thickness [Z-1 ~> m-1].
+    zcol1, &      ! The height of the interfaces to the south of a v-point [Z ~> m].
+    zcol2, &      ! The height of the interfaces to the north of a v-point [Z ~> m].
+    Ztop_min, &   ! The deeper of the two adjacent surface heights [Z ~> m].
+    Dmin, &       ! The shallower of the two adjacent bottom depths [Z ~> m].
     zh, &         ! An estimate of the interface's distance from the bottom
-                  ! based on harmonic mean thicknesses [H ~> m or kg m-2].
-    h_ml          ! The mixed layer depth [H ~> m or kg m-2].
-  real, allocatable, dimension(:,:) :: hML_u ! Diagnostic of the mixed layer depth at u points [H ~> m or kg m-2].
-  real, allocatable, dimension(:,:) :: hML_v ! Diagnostic of the mixed layer depth at v points [H ~> m or kg m-2].
+                  ! based on harmonic mean thicknesses [Z ~> m].
+    h_ml          ! The mixed layer depth [Z ~> m].
+  real, allocatable, dimension(:,:) :: hML_u ! Diagnostic of the mixed layer depth at u points [Z ~> m].
+  real, allocatable, dimension(:,:) :: hML_v ! Diagnostic of the mixed layer depth at v points [Z ~> m].
   real, allocatable, dimension(:,:,:) :: Kv_u ! Total vertical viscosity at u-points in
                                               ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
   real, allocatable, dimension(:,:,:) :: Kv_v ! Total vertical viscosity at v-points in
@@ -991,18 +997,20 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
                                               ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
   real, allocatable, dimension(:,:,:) :: Kv_gl90_v ! GL90 vertical viscosity at v-points in
                                               ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
-  real :: zcol(SZI_(G)) ! The height of an interface at h-points [H ~> m or kg m-2].
+  real :: zcol(SZI_(G)) ! The height of an interface at h-points [Z ~> m].
   real :: botfn   ! A function which goes from 1 at the bottom to 0 much more
                   ! than Hbbl into the interior [nondim].
   real :: topfn   ! A function which goes from 1 at the top to 0 much more
                   ! than Htbl into the interior [nondim].
   real :: z2      ! The distance from the bottom, normalized by Hbbl [nondim]
   real :: z2_wt   ! A nondimensional (0-1) weight used when calculating z2 [nondim].
-  real :: z_clear ! The clearance of an interface above the surrounding topography [H ~> m or kg m-2].
+  real :: z_clear ! The clearance of an interface above the surrounding topography [Z ~> m].
   real :: a_cpl_max  ! The maximum drag coefficient across interfaces, set so that it will be
                      ! representable as a 32-bit float in MKS units [H T-1 ~> m s-1 or Pa s m-1]
   real :: h_neglect  ! A thickness that is so small it is usually lost
                      ! in roundoff and can be neglected [H ~> m or kg m-2].
+  real :: dz_neglect ! A vertical distance that is so small it is usually lost
+                     ! in roundoff and can be neglected [Z ~> m].
 
   real :: I_valBL ! The inverse of a scaling factor determining when water is
                   ! still within the boundary layer, as determined by the sum
@@ -1023,10 +1031,11 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
          "Module must be initialized before it is used.")
 
   h_neglect = GV%H_subroundoff
+  dz_neglect = GV%dZ_subroundoff
   a_cpl_max = 1.0e37 * GV%m_to_H * US%T_to_s
-  I_Hbbl(:) = 1.0 / (CS%Hbbl + h_neglect)
+  I_Hbbl(:) = 1.0 / (CS%Hbbl + dz_neglect)
   if (CS%use_GL90_in_SSW) then
-    I_Hbbl_gl90 = 1.0 / (CS%Hbbl_gl90 + h_neglect)
+    I_Hbbl_gl90 = 1.0 / (CS%Hbbl_gl90 + dz_neglect)
   endif
   I_valBL = 0.0 ; if (CS%harm_BL_val > 0.0) I_valBL = 1.0 / CS%harm_BL_val
 
@@ -1051,14 +1060,14 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
   endif
 
   !$OMP parallel do default(private) shared(G,GV,US,CS,visc,Isq,Ieq,nz,u,h,forces,hML_u, &
-  !$OMP                                     OBC,h_neglect,dt,I_valBL,Kv_u,a_cpl_max) &
+  !$OMP                                     OBC,h_neglect,dz_neglect,dt,I_valBL,Kv_u,a_cpl_max) &
   !$OMP                     firstprivate(i_hbbl)
   do j=G%Jsc,G%Jec
     do I=Isq,Ieq ; do_i(I) = (G%mask2dCu(I,j) > 0.0) ; enddo
 
     if (CS%bottomdraglaw) then ; do I=Isq,Ieq
       kv_bbl(I) = visc%Kv_bbl_u(I,j)
-      bbl_thick(I) = visc%bbl_thick_u(I,j) + h_neglect
+      bbl_thick(I) = GV%H_to_Z*visc%bbl_thick_u(I,j) + dz_neglect
       if (do_i(I)) I_Hbbl(I) = 1.0 / bbl_thick(I)
     enddo ; endif
 
@@ -1066,9 +1075,11 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       h_harm(I,k) = 2.0*h(i,j,k)*h(i+1,j,k) / (h(i,j,k)+h(i+1,j,k)+h_neglect)
       h_arith(I,k) = 0.5*(h(i+1,j,k)+h(i,j,k))
       h_delta(I,k) = h(i+1,j,k) - h(i,j,k)
+      dz_harm(I,k) = 2.0*dz(i,j,k)*dz(i+1,j,k) / (dz(i,j,k)+dz(i+1,j,k)+dz_neglect)
+      dz_arith(I,k) = 0.5*(dz(i+1,j,k)+dz(i,j,k))
     endif ; enddo ; enddo
     do I=Isq,Ieq
-      Dmin(I) = min(G%bathyT(i,j), G%bathyT(i+1,j)) * GV%Z_to_H
+      Dmin(I) = min(G%bathyT(i,j), G%bathyT(i+1,j))
       zi_dir(I) = 0
     enddo
 
@@ -1076,19 +1087,25 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
     if (associated(OBC)) then ; if (OBC%number_of_segments > 0) then
       do I=Isq,Ieq ; if (do_i(I) .and. (OBC%segnum_u(I,j) /= OBC_NONE)) then
         if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_E) then
-          do k=1,nz ; h_harm(I,k) = h(i,j,k) ; h_arith(I,k) = h(i,j,k) ; h_delta(I,k) = 0. ; enddo
-          Dmin(I) = G%bathyT(i,j) * GV%Z_to_H
+          do k=1,nz
+            h_harm(I,k) = h(i,j,k) ; h_arith(I,k) = h(i,j,k) ; h_delta(I,k) = 0.
+            dz_harm(I,k) = dz(i,j,k) ; dz_arith(I,k) = dz(i,j,k)
+          enddo
+          Dmin(I) = G%bathyT(i,j)
           zi_dir(I) = -1
         elseif (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_W) then
-          do k=1,nz ; h_harm(I,k) = h(i+1,j,k) ; h_arith(I,k) = h(i+1,j,k) ; h_delta(I,k) = 0. ; enddo
-          Dmin(I) = G%bathyT(i+1,j) * GV%Z_to_H
+          do k=1,nz
+            h_harm(I,k) = h(i+1,j,k) ; h_arith(I,k) = h(i+1,j,k) ; h_delta(I,k) = 0.
+            dz_harm(I,k) = dz(i+1,j,k) ; dz_arith(I,k) = dz(i+1,j,k)
+          enddo
+          Dmin(I) = G%bathyT(i+1,j)
           zi_dir(I) = 1
         endif
       endif ; enddo
     endif ; endif
 
 !    The following block calculates the thicknesses at velocity
-!  grid points for the vertical viscosity (hvel).  Near the
+!  grid points for the vertical viscosity (hvel and dz_vel).  Near the
 !  bottom an upwind biased thickness is used to control the effect
 !  of spurious Montgomery potential gradients at the bottom where
 !  nearly massless layers layers ride over the topography.
@@ -1096,19 +1113,21 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       do I=Isq,Ieq ; z_i(I,nz+1) = 0.0 ; enddo
       do k=nz,1,-1 ; do I=Isq,Ieq ; if (do_i(I)) then
         hvel(I,k) = h_harm(I,k)
+        dz_vel(I,k) = dz_harm(I,k)
         if (u(I,j,k) * h_delta(I,k) < 0) then
           z2 = z_i(I,k+1) ; botfn = 1.0 / (1.0 + 0.09*z2*z2*z2*z2*z2*z2)
           hvel(I,k) = (1.0-botfn)*h_harm(I,k) + botfn*h_arith(I,k)
+          dz_vel(I,k) = (1.0-botfn)*dz_harm(I,k) + botfn*dz_arith(I,k)
         endif
-        z_i(I,k) =  z_i(I,k+1) + h_harm(I,k)*I_Hbbl(I)
+        z_i(I,k) =  z_i(I,k+1) + dz_harm(I,k)*I_Hbbl(I)
       endif ; enddo ; enddo ! i & k loops
     else ! Not harmonic_visc
       do I=Isq,Ieq ; zh(I) = 0.0 ; z_i(I,nz+1) = 0.0 ; enddo
-      do i=Isq,Ieq+1 ; zcol(i) = -G%bathyT(i,j) * GV%Z_to_H ; enddo
+      do i=Isq,Ieq+1 ; zcol(i) = -G%bathyT(i,j) ; enddo
       do k=nz,1,-1
-        do i=Isq,Ieq+1 ; zcol(i) = zcol(i) + h(i,j,k) ; enddo
+        do i=Isq,Ieq+1 ; zcol(i) = zcol(i) + dz(i,j,k) ; enddo
         do I=Isq,Ieq ; if (do_i(I)) then
-          zh(I) = zh(I) + h_harm(I,k)
+          zh(I) = zh(I) + dz_harm(I,k)
 
           z_clear = max(zcol(i),zcol(i+1)) + Dmin(I)
           if (zi_dir(I) < 0) z_clear = zcol(i) + Dmin(I)
@@ -1117,15 +1136,18 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
           z_i(I,k) = max(zh(I), z_clear) * I_Hbbl(I)
 
           hvel(I,k) = h_arith(I,k)
+          dz_vel(I,k) = dz_arith(I,k)
           if (u(I,j,k) * h_delta(I,k) > 0) then
             if (zh(I) * I_Hbbl(I) < CS%harm_BL_val) then
               hvel(I,k) = h_harm(I,k)
+              dz_vel(I,k) = dz_harm(I,k)
             else
               z2_wt = 1.0  ; if (zh(I) * I_Hbbl(I) < 2.0*CS%harm_BL_val) &
                 z2_wt = max(0.0, min(1.0, zh(I) * I_Hbbl(I) * I_valBL - 1.0))
               z2 = z2_wt * (max(zh(I), z_clear) * I_Hbbl(I))
               botfn = 1.0 / (1.0 + 0.09*z2*z2*z2*z2*z2*z2)
               hvel(I,k) = (1.0-botfn)*h_arith(I,k) + botfn*h_harm(I,k)
+              dz_vel(I,k) = (1.0-botfn)*dz_arith(I,k) + botfn*dz_harm(I,k)
             endif
           endif
 
@@ -1133,7 +1155,7 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       enddo ! k loop
     endif
 
-    call find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i, h_ml, &
+    call find_coupling_coef(a_cpl, dz_vel, do_i, dz_harm, bbl_thick, kv_bbl, z_i, h_ml, &
                             dt, j, G, GV, US, CS, visc, forces, work_on_u=.true., OBC=OBC)
     a_cpl_gl90(:,:) = 0.0
     if (CS%use_GL90_in_SSW) then
@@ -1147,9 +1169,9 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
     !  over topography, small enough to not contaminate the interior.
       do I=Isq,Ieq ; z_i_gl90(I,nz+1) = 0.0 ; enddo
       do k=nz,1,-1 ; do I=Isq,Ieq ; if (do_i(I)) then
-        z_i_gl90(I,k) =  z_i_gl90(I,k+1) + h_harm(I,k)*I_Hbbl_gl90(I)
+        z_i_gl90(I,k) =  z_i_gl90(I,k+1) + dz_harm(I,k)*I_Hbbl_gl90(I)
       endif ; enddo ; enddo ! i & k loops
-      call find_coupling_coef_gl90(a_cpl_gl90, hvel, do_i, z_i_gl90, j, G, GV, CS, VarMix, work_on_u=.true.)
+      call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, do_i, z_i_gl90, j, G, GV, CS, VarMix, work_on_u=.true.)
     endif
 
     if (allocated(hML_u)) then
@@ -1165,34 +1187,38 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       enddo
       if (do_any_shelf) then
         if (CS%harmonic_visc) then
-          do k=1,nz ; do I=Isq,Ieq ; hvel_shelf(I,k) = hvel(I,k) ; enddo ; enddo
+          do k=1,nz ; do I=Isq,Ieq
+            hvel_shelf(I,k) = hvel(I,k) ; dz_vel_shelf(I,k) = dz_vel(I,k)
+          enddo ; enddo
         else  ! Find upwind-biased thickness near the surface.
           ! Perhaps this needs to be done more carefully, via find_eta.
           do I=Isq,Ieq ; if (do_i_shelf(I)) then
             zh(I) = 0.0 ; Ztop_min(I) = min(zcol(i), zcol(i+1))
-            I_HTbl(I) = 1.0 / (visc%tbl_thick_shelf_u(I,j) + h_neglect)
+            I_HTbl(I) = 1.0 / (GV%H_to_Z*visc%tbl_thick_shelf_u(I,j) + dz_neglect)
           endif ; enddo
           do k=1,nz
-            do i=Isq,Ieq+1 ; zcol(i) = zcol(i) - h(i,j,k) ; enddo
+            do i=Isq,Ieq+1 ; zcol(i) = zcol(i) - dz(i,j,k) ; enddo
             do I=Isq,Ieq ; if (do_i_shelf(I)) then
-              zh(I) = zh(I) + h_harm(I,k)
+              zh(I) = zh(I) + dz_harm(I,k)
 
-              hvel_shelf(I,k) = hvel(I,k)
+              hvel_shelf(I,k) = hvel(I,k) ; dz_vel_shelf(I,k) = dz_vel(I,k)
               if (u(I,j,k) * h_delta(I,k) > 0) then
                 if (zh(I) * I_HTbl(I) < CS%harm_BL_val) then
                   hvel_shelf(I,k) = min(hvel(I,k), h_harm(I,k))
+                  dz_vel_shelf(I,k) = min(dz_vel(I,k), dz_harm(I,k))
                 else
                   z2_wt = 1.0  ; if (zh(I) * I_HTbl(I) < 2.0*CS%harm_BL_val) &
                     z2_wt = max(0.0, min(1.0, zh(I) * I_HTbl(I) * I_valBL - 1.0))
                   z2 = z2_wt * (max(zh(I), Ztop_min(I) - min(zcol(i),zcol(i+1))) * I_HTbl(I))
                   topfn = 1.0 / (1.0 + 0.09*z2**6)
                   hvel_shelf(I,k) = min(hvel(I,k), (1.0-topfn)*h_arith(I,k) + topfn*h_harm(I,k))
+                  dz_vel_shelf(I,k) = min(dz_vel(I,k), (1.0-topfn)*dz_arith(I,k) + topfn*dz_harm(I,k))
                 endif
               endif
             endif ; enddo
           enddo
         endif
-        call find_coupling_coef(a_shelf, hvel_shelf, do_i_shelf, h_harm, bbl_thick, &
+        call find_coupling_coef(a_shelf, dz_vel_shelf, do_i_shelf, dz_harm, bbl_thick, &
                                 kv_bbl, z_i, h_ml, dt, j, G, GV, US, CS, visc, forces, &
                                 work_on_u=.true., OBC=OBC, shelf=.true.)
         do I=Isq,Ieq ; if (do_i_shelf(I)) CS%a1_shelf_u(I,j) = a_shelf(I,1) ; enddo
@@ -1244,14 +1270,14 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
 
   ! Now work on v-points.
   !$OMP parallel do default(private) shared(G,GV,CS,US,visc,is,ie,Jsq,Jeq,nz,v,h,forces,hML_v, &
-  !$OMP                                  OBC,h_neglect,dt,I_valBL,Kv_v,a_cpl_max) &
+  !$OMP                                  OBC,h_neglect,dz_neglect,dt,I_valBL,Kv_v,a_cpl_max) &
   !$OMP                     firstprivate(i_hbbl)
   do J=Jsq,Jeq
     do i=is,ie ; do_i(i) = (G%mask2dCv(i,J) > 0.0) ; enddo
 
     if (CS%bottomdraglaw) then ; do i=is,ie
       kv_bbl(i) = visc%Kv_bbl_v(i,J)
-      bbl_thick(i) = visc%bbl_thick_v(i,J) + h_neglect
+      bbl_thick(i) = GV%H_to_Z*visc%bbl_thick_v(i,J) + dz_neglect
       if (do_i(i)) I_Hbbl(i) = 1.0 / bbl_thick(i)
     enddo ; endif
 
@@ -1259,9 +1285,11 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       h_harm(i,k) = 2.0*h(i,j,k)*h(i,j+1,k) / (h(i,j,k)+h(i,j+1,k)+h_neglect)
       h_arith(i,k) = 0.5*(h(i,j+1,k)+h(i,j,k))
       h_delta(i,k) = h(i,j+1,k) - h(i,j,k)
+      dz_harm(i,k) = 2.0*dz(i,j,k)*dz(i,j+1,k) / (dz(i,j,k)+dz(i,j+1,k)+dz_neglect)
+      dz_arith(i,k) = 0.5*(dz(i,j+1,k)+dz(i,j,k))
     endif ; enddo ; enddo
     do i=is,ie
-      Dmin(i) = min(G%bathyT(i,j), G%bathyT(i,j+1)) * GV%Z_to_H
+      Dmin(i) = min(G%bathyT(i,j), G%bathyT(i,j+1))
       zi_dir(i) = 0
     enddo
 
@@ -1269,12 +1297,18 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
     if (associated(OBC)) then ; if (OBC%number_of_segments > 0) then
       do i=is,ie ; if (do_i(i) .and. (OBC%segnum_v(i,J) /= OBC_NONE)) then
         if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_N) then
-          do k=1,nz ; h_harm(I,k) = h(i,j,k) ; h_arith(I,k) = h(i,j,k) ; h_delta(i,k) = 0. ; enddo
-          Dmin(I) = G%bathyT(i,j) * GV%Z_to_H
+          do k=1,nz
+            h_harm(I,k) = h(i,j,k) ; h_arith(I,k) = h(i,j,k) ; h_delta(i,k) = 0.
+            dz_harm(I,k) = dz(i,j,k) ; dz_arith(I,k) = dz(i,j,k)
+          enddo
+          Dmin(I) = G%bathyT(i,j)
           zi_dir(I) = -1
         elseif (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_S) then
-          do k=1,nz ; h_harm(i,k) = h(i,j+1,k) ; h_arith(i,k) = h(i,j+1,k) ; h_delta(i,k) = 0. ; enddo
-          Dmin(i) = G%bathyT(i,j+1) * GV%Z_to_H
+          do k=1,nz
+            h_harm(i,k) = h(i,j+1,k) ; h_arith(i,k) = h(i,j+1,k) ; h_delta(i,k) = 0.
+            dz_harm(i,k) = dz(i,j+1,k) ; dz_arith(i,k) = dz(i,j+1,k)
+          enddo
+          Dmin(i) = G%bathyT(i,j+1)
           zi_dir(i) = 1
         endif
       endif ; enddo
@@ -1290,21 +1324,23 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
 
       do k=nz,1,-1 ; do i=is,ie ; if (do_i(i)) then
         hvel(i,k) = h_harm(i,k)
+        dz_vel(i,k) = dz_harm(i,k)
         if (v(i,J,k) * h_delta(i,k) < 0) then
           z2 = z_i(i,k+1) ; botfn = 1.0 / (1.0 + 0.09*z2*z2*z2*z2*z2*z2)
           hvel(i,k) = (1.0-botfn)*h_harm(i,k) + botfn*h_arith(i,k)
+          dz_vel(i,k) = (1.0-botfn)*dz_harm(i,k) + botfn*dz_arith(i,k)
         endif
-        z_i(i,k) = z_i(i,k+1)  + h_harm(i,k)*I_Hbbl(i)
+        z_i(i,k) = z_i(i,k+1)  + dz_harm(i,k)*I_Hbbl(i)
       endif ; enddo ; enddo ! i & k loops
     else ! Not harmonic_visc
       do i=is,ie
         zh(i) = 0.0 ; z_i(i,nz+1) = 0.0
-        zcol1(i) = -G%bathyT(i,j) * GV%Z_to_H
-        zcol2(i) = -G%bathyT(i,j+1) * GV%Z_to_H
+        zcol1(i) = -G%bathyT(i,j)
+        zcol2(i) = -G%bathyT(i,j+1)
       enddo
       do k=nz,1,-1 ; do i=is,ie ; if (do_i(i)) then
-        zh(i) = zh(i) + h_harm(i,k)
-        zcol1(i) = zcol1(i) + h(i,j,k) ; zcol2(i) = zcol2(i) + h(i,j+1,k)
+        zh(i) = zh(i) + dz_harm(i,k)
+        zcol1(i) = zcol1(i) + dz(i,j,k) ; zcol2(i) = zcol2(i) + dz(i,j+1,k)
 
         z_clear = max(zcol1(i),zcol2(i)) + Dmin(i)
         if (zi_dir(i) < 0) z_clear = zcol1(i) + Dmin(I)
@@ -1313,22 +1349,25 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
         z_i(I,k) = max(zh(i), z_clear) * I_Hbbl(i)
 
         hvel(i,k) = h_arith(i,k)
+        dz_vel(i,k) = dz_arith(i,k)
         if (v(i,J,k) * h_delta(i,k) > 0) then
           if (zh(i) * I_Hbbl(i) < CS%harm_BL_val) then
             hvel(i,k) = h_harm(i,k)
+            dz_vel(i,k) = dz_harm(i,k)
           else
             z2_wt = 1.0  ; if (zh(i) * I_Hbbl(i) < 2.0*CS%harm_BL_val) &
               z2_wt = max(0.0, min(1.0, zh(i) * I_Hbbl(i) * I_valBL - 1.0))
             z2 = z2_wt * (max(zh(i), max(zcol1(i),zcol2(i)) + Dmin(i)) * I_Hbbl(i))
             botfn = 1.0 / (1.0 + 0.09*z2*z2*z2*z2*z2*z2)
             hvel(i,k) = (1.0-botfn)*h_arith(i,k) + botfn*h_harm(i,k)
+            dz_vel(i,k) = (1.0-botfn)*dz_arith(i,k) + botfn*dz_harm(i,k)
           endif
         endif
 
       endif ; enddo ; enddo ! i & k loops
     endif
 
-    call find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i, h_ml, &
+    call find_coupling_coef(a_cpl, dz_vel, do_i, dz_harm, bbl_thick, kv_bbl, z_i, h_ml, &
                             dt, j, G, GV, US, CS, visc, forces, work_on_u=.false., OBC=OBC)
     a_cpl_gl90(:,:) = 0.0
     if (CS%use_GL90_in_SSW) then
@@ -1343,10 +1382,10 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       do i=is,ie ; z_i_gl90(i,nz+1) = 0.0 ; enddo
 
       do k=nz,1,-1 ; do i=is,ie ; if (do_i(i)) then
-        z_i_gl90(i,k) = z_i_gl90(i,k+1)  + h_harm(i,k)*I_Hbbl_gl90(i)
+        z_i_gl90(i,k) = z_i_gl90(i,k+1) + dz_harm(i,k)*I_Hbbl_gl90(i)
       endif ; enddo ; enddo ! i & k loops
 
-      call find_coupling_coef_gl90(a_cpl_gl90, hvel, do_i, z_i_gl90, j, G, GV, CS, VarMix, work_on_u=.false.)
+      call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, do_i, z_i_gl90, j, G, GV, CS, VarMix, work_on_u=.false.)
     endif
 
     if ( allocated(hML_v)) then
@@ -1361,34 +1400,38 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       enddo
       if (do_any_shelf) then
         if (CS%harmonic_visc) then
-          do k=1,nz ; do i=is,ie ; hvel_shelf(i,k) = hvel(i,k) ; enddo ; enddo
+          do k=1,nz ; do i=is,ie
+            hvel_shelf(i,k) = hvel(i,k) ; dz_vel_shelf(i,k) = dz_vel(i,k)
+          enddo ; enddo
         else  ! Find upwind-biased thickness near the surface.
           ! Perhaps this needs to be done more carefully, via find_eta.
           do i=is,ie ; if (do_i_shelf(i)) then
             zh(i) = 0.0 ; Ztop_min(I) = min(zcol1(i), zcol2(i))
-            I_HTbl(i) = 1.0 / (visc%tbl_thick_shelf_v(i,J) + h_neglect)
+            I_HTbl(i) = 1.0 / (GV%H_to_Z*visc%tbl_thick_shelf_v(i,J) + dz_neglect)
           endif ; enddo
           do k=1,nz
             do i=is,ie ; if (do_i_shelf(i)) then
-              zcol1(i) = zcol1(i) - h(i,j,k) ; zcol2(i) = zcol2(i) - h(i,j+1,k)
-              zh(i) = zh(i) + h_harm(i,k)
+              zcol1(i) = zcol1(i) - dz(i,j,k) ; zcol2(i) = zcol2(i) - dz(i,j+1,k)
+              zh(i) = zh(i) + dz_harm(i,k)
 
-              hvel_shelf(i,k) = hvel(i,k)
+              hvel_shelf(i,k) = hvel(i,k) ; dz_vel_shelf(i,k) = dz_vel(i,k)
               if (v(i,J,k) * h_delta(i,k) > 0) then
                 if (zh(i) * I_HTbl(i) < CS%harm_BL_val) then
                   hvel_shelf(i,k) = min(hvel(i,k), h_harm(i,k))
+                  dz_vel_shelf(i,k) = min(dz_vel(i,k), dz_harm(i,k))
                 else
                   z2_wt = 1.0  ; if (zh(i) * I_HTbl(i) < 2.0*CS%harm_BL_val) &
                     z2_wt = max(0.0, min(1.0, zh(i) * I_HTbl(i) * I_valBL - 1.0))
                   z2 = z2_wt * (max(zh(i), Ztop_min(i) - min(zcol1(i),zcol2(i))) * I_HTbl(i))
                   topfn = 1.0 / (1.0 + 0.09*z2**6)
                   hvel_shelf(i,k) = min(hvel(i,k), (1.0-topfn)*h_arith(i,k) + topfn*h_harm(i,k))
+                  dz_vel_shelf(i,k) = min(dz_vel(i,k), (1.0-topfn)*dz_arith(i,k) + topfn*dz_harm(i,k))
                 endif
              endif
             endif ; enddo
           enddo
         endif
-        call find_coupling_coef(a_shelf, hvel_shelf, do_i_shelf, h_harm, bbl_thick, &
+        call find_coupling_coef(a_shelf, dz_vel_shelf, do_i_shelf, dz_harm, bbl_thick, &
                                 kv_bbl, z_i, h_ml, dt, j, G, GV, US, CS, visc, forces, &
                                 work_on_u=.false., OBC=OBC, shelf=.true.)
         do i=is,ie ; if (do_i_shelf(i)) CS%a1_shelf_v(i,J) = a_shelf(i,1) ; enddo
@@ -1419,7 +1462,7 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
       endif ; enddo ; enddo
       do K=1,nz+1 ; do i=is,ie ; if (do_i(i)) then
         CS%a_v_gl90(i,J,K) = min(a_cpl_max, a_cpl_gl90(i,K))
-        endif ; enddo ; enddo
+      endif ; enddo ; enddo
       do k=1,nz ; do i=is,ie ; if (do_i(i)) CS%h_v(i,J,k) = hvel(i,k) + h_neglect ; enddo ; enddo
     endif
 
@@ -1444,7 +1487,7 @@ subroutine vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS, OBC, VarMix)
                   scale=GV%H_to_m*US%s_to_T, scalar_pair=.true.)
     if (allocated(hML_u) .and. allocated(hML_v)) &
       call uvchksum("vertvisc_coef hML_[uv]", hML_u, hML_v, G%HI, &
-                    haloshift=0, scale=GV%H_to_m, scalar_pair=.true.)
+                    haloshift=0, scale=US%Z_to_m, scalar_pair=.true.)
   endif
 
 ! Offer diagnostic fields for averaging.
@@ -1481,20 +1524,20 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
   real, dimension(SZIB_(G),SZK_(GV)+1), &
                              intent(out) :: a_cpl !< Coupling coefficient across interfaces [H T-1 ~> m s-1 or Pa s m-1]
   real, dimension(SZIB_(G),SZK_(GV)), &
-                             intent(in)  :: hvel !< Thickness at velocity points [H ~> m or kg m-2]
+                             intent(in)  :: hvel !< Distance between interfaces at velocity points [Z ~> m]
   logical, dimension(SZIB_(G)), &
                              intent(in)  :: do_i !< If true, determine coupling coefficient for a column
   real, dimension(SZIB_(G),SZK_(GV)), &
                              intent(in)  :: h_harm !< Harmonic mean of thicknesses around a velocity
-                                                   !! grid point [H ~> m or kg m-2]
-  real, dimension(SZIB_(G)), intent(in)  :: bbl_thick !< Bottom boundary layer thickness [H ~> m or kg m-2]
+                                                   !! grid point [Z ~> m]
+  real, dimension(SZIB_(G)), intent(in)  :: bbl_thick !< Bottom boundary layer thickness [Z ~> m]
   real, dimension(SZIB_(G)), intent(in)  :: kv_bbl !< Bottom boundary layer viscosity, exclusive of
                                                    !! any depth-dependent contributions from
                                                    !! visc%Kv_shear [H Z T-1 ~> m2 s-1 or Pa s]
   real, dimension(SZIB_(G),SZK_(GV)+1), &
                              intent(in)  :: z_i  !< Estimate of interface heights above the bottom,
                                                  !! normalized by the bottom boundary layer thickness [nondim]
-  real, dimension(SZIB_(G)), intent(out) :: h_ml !< Mixed layer depth [H ~> m or kg m-2]
+  real, dimension(SZIB_(G)), intent(out) :: h_ml !< Mixed layer depth [Z ~> m]
   integer,                   intent(in)  :: j    !< j-index to find coupling coefficient for
   real,                      intent(in)  :: dt   !< Time increment [T ~> s]
   type(vertvisc_CS),         pointer     :: CS   !< Vertical viscosity control structure
@@ -1509,32 +1552,32 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
   ! Local variables
 
   real, dimension(SZIB_(G)) :: &
-    u_star, &   ! ustar at a velocity point in thickness-based units [H T-1 ~> m s-1 or kg m-2 s-1]
+    u_star, &   ! ustar at a velocity point [Z T-1 ~> m s-1]
     absf, &     ! The average of the neighboring absolute values of f [T-1 ~> s-1].
 !      h_ml, &  ! The mixed layer depth [H ~> m or kg m-2].
     z_t, &      ! The distance from the top, sometimes normalized
-                ! by Hmix, [H ~> m or kg m-2] or [nondim].
+                ! by Hmix, [Z ~> m] or [nondim].
     kv_TBL, &   ! The viscosity in a top boundary layer under ice [H Z T-1 ~> m2 s-1 or Pa s]
-    tbl_thick   ! The thickness of the top boundary layer [H ~> m or kg m-2]
+    tbl_thick   ! The thickness of the top boundary layer [Z ~> m]
   real, dimension(SZIB_(G),SZK_(GV)+1) :: &
     Kv_tot, &   ! The total viscosity at an interface [H Z T-1 ~> m2 s-1 or Pa s]
     Kv_add      ! A viscosity to add [H Z T-1 ~> m2 s-1 or Pa s]
   integer, dimension(SZIB_(G)) :: &
     nk_in_ml      ! The index of the deepest interface in the mixed layer.
-  real :: h_shear ! The distance over which shears occur [H ~> m or kg m-2].
-  real :: dhc     ! The distance between the center of adjacent layers [H ~> m or kg m-2].
-  real :: visc_ml ! The mixed layer viscosity recast into thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
-  real :: I_Hmix  ! The inverse of the mixed layer thickness [H-1 ~> m-1 or m2 kg-1].
+  real :: h_shear ! The distance over which shears occur [Z ~> m].
+  real :: dhc     ! The distance between the center of adjacent layers [Z ~> m].
+  real :: visc_ml ! The mixed layer viscosity [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
+  real :: I_Hmix  ! The inverse of the mixed layer thickness [Z-1 ~> m-1].
   real :: a_ml    ! The layer coupling coefficient across an interface in
                   ! the mixed layer [H T-1 ~> m s-1 or Pa s m-1].
   real :: a_floor ! A lower bound on the layer coupling coefficient across an interface in
                   ! the mixed layer [H T-1 ~> m s-1 or Pa s m-1].
   real :: I_amax  ! The inverse of the maximum coupling coefficient [T H-1 ~> s m-1 or s m2 kg-1].
-  real :: temp1   ! A temporary variable [H2 ~> m2 or kg2 m-4]
+  real :: temp1   ! A temporary variable [Z2 ~> m2]
   real :: ustar2_denom ! A temporary variable in the surface boundary layer turbulence
-                  ! calculations [T-1 ~> s-1]
-  real :: h_neglect ! A thickness that is so small it is usually lost
-                  ! in roundoff and can be neglected [H ~> m or kg m-2].
+                  ! calculations [H Z-1 T-1 ~> s-1 or kg m-3 s-1]
+  real :: h_neglect ! A vertical distance that is so small it is usually lost
+                  ! in roundoff and can be neglected [Z ~> m].
   real :: z2      ! A copy of z_i [nondim]
   real :: botfn   ! A function that is 1 at the bottom and small far from it [nondim]
   real :: topfn   ! A function that is 1 at the top and small far from it [nondim]
@@ -1549,7 +1592,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
   if (work_on_u) then ; is = G%IscB ; ie = G%IecB
   else ; is = G%isc ; ie = G%iec ; endif
   nz = GV%ke
-  h_neglect = GV%H_subroundoff
+  h_neglect = GV%dZ_subroundoff
 
   if (CS%answer_date < 20190101) then
     !   The maximum coupling coefficient was originally introduced to avoid
@@ -1650,9 +1693,9 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
       ! These expressions assume that Kv_tot(i,nz+1) = CS%Kv, consistent with
       ! the suppression of turbulent mixing by the presence of a solid boundary.
       if (dhc < bbl_thick(i)) then
-        a_cpl(i,nz+1) = kv_bbl(i) / (GV%H_to_Z*(dhc+h_neglect) + I_amax*kv_bbl(i))
+        a_cpl(i,nz+1) = kv_bbl(i) / ((dhc+h_neglect) + I_amax*kv_bbl(i))
       else
-        a_cpl(i,nz+1) = kv_bbl(i) / (GV%H_to_Z*(bbl_thick(i)+h_neglect) + I_amax*kv_bbl(i))
+        a_cpl(i,nz+1) = kv_bbl(i) / ((bbl_thick(i)+h_neglect) + I_amax*kv_bbl(i))
       endif
     endif ; enddo
     do K=nz,2,-1 ; do i=is,ie ; if (do_i(i)) then
@@ -1670,14 +1713,14 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
       endif
 
       ! Calculate the coupling coefficients from the viscosities.
-      a_cpl(i,K) = Kv_tot(i,K) / (GV%H_to_Z*h_shear + I_amax*Kv_tot(i,K))
+      a_cpl(i,K) = Kv_tot(i,K) / (h_shear + I_amax*Kv_tot(i,K))
     endif ; enddo ; enddo ! i & k loops
   elseif (abs(CS%Kv_extra_bbl) > 0.0) then
     ! There is a simple enhancement of the near-bottom viscosities, but no adjustment
     ! of the viscous coupling length scales to give a particular bottom stress.
     do i=is,ie ; if (do_i(i)) then
       a_cpl(i,nz+1) = (Kv_tot(i,nz+1) + CS%Kv_extra_bbl) / &
-                      (GV%H_to_Z*(0.5*hvel(i,nz)+h_neglect) + I_amax*(Kv_tot(i,nz+1)+CS%Kv_extra_bbl))
+                      ((0.5*hvel(i,nz)+h_neglect) + I_amax*(Kv_tot(i,nz+1)+CS%Kv_extra_bbl))
     endif ; enddo
     do K=nz,2,-1 ; do i=is,ie ; if (do_i(i)) then
       !    botfn determines when a point is within the influence of the bottom
@@ -1689,18 +1732,18 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
       h_shear = 0.5*(hvel(i,k) + hvel(i,k-1) + h_neglect)
 
       ! Calculate the coupling coefficients from the viscosities.
-      a_cpl(i,K) = Kv_tot(i,K) / (GV%H_to_Z*h_shear + I_amax*Kv_tot(i,K))
+      a_cpl(i,K) = Kv_tot(i,K) / (h_shear + I_amax*Kv_tot(i,K))
     endif ; enddo ; enddo ! i & k loops
   else
     ! Any near-bottom viscous enhancements were already incorporated into Kv_tot, and there is
     ! no adjustment of the viscous coupling length scales to give a particular bottom stress.
     do i=is,ie ; if (do_i(i)) then
-      a_cpl(i,nz+1) = Kv_tot(i,nz+1) / (GV%H_to_Z*(0.5*hvel(i,nz)+h_neglect) + I_amax*Kv_tot(i,nz+1))
+      a_cpl(i,nz+1) = Kv_tot(i,nz+1) / ((0.5*hvel(i,nz)+h_neglect) + I_amax*Kv_tot(i,nz+1))
     endif ; enddo
     do K=nz,2,-1 ; do i=is,ie ; if (do_i(i)) then
       h_shear = 0.5*(hvel(i,k) + hvel(i,k-1) + h_neglect)
       ! Calculate the coupling coefficients from the viscosities.
-      a_cpl(i,K) = Kv_tot(i,K) / (GV%H_to_Z*h_shear + I_amax*Kv_tot(i,K))
+      a_cpl(i,K) = Kv_tot(i,K) / (h_shear + I_amax*Kv_tot(i,K))
     endif ; enddo ; enddo ! i & k loops
   endif
 
@@ -1712,18 +1755,18 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
     do i=is,ie ; if (do_i(i)) then
       if (work_on_u) then
         kv_TBL(i) = visc%Kv_tbl_shelf_u(I,j)
-        tbl_thick(i) = visc%tbl_thick_shelf_u(I,j) + h_neglect
+        tbl_thick(i) = GV%H_to_Z*visc%tbl_thick_shelf_u(I,j) + h_neglect
       else
         kv_TBL(i) = visc%Kv_tbl_shelf_v(i,J)
-        tbl_thick(i) = visc%tbl_thick_shelf_v(i,J) + h_neglect
+        tbl_thick(i) = GV%H_to_Z*visc%tbl_thick_shelf_v(i,J) + h_neglect
       endif
       z_t(i) = 0.0
 
       ! If a_cpl(i,1) were not already 0, it would be added here.
       if (0.5*hvel(i,1) > tbl_thick(i)) then
-        a_cpl(i,1) = kv_TBL(i) / (GV%H_to_Z*tbl_thick(i) + I_amax*kv_TBL(i))
+        a_cpl(i,1) = kv_TBL(i) / (tbl_thick(i) + I_amax*kv_TBL(i))
       else
-        a_cpl(i,1) = kv_TBL(i) / (GV%H_to_Z*(0.5*hvel(i,1)+h_neglect) + I_amax*kv_TBL(i))
+        a_cpl(i,1) = kv_TBL(i) / ((0.5*hvel(i,1)+h_neglect) + I_amax*kv_TBL(i))
       endif
     endif ; enddo
 
@@ -1739,7 +1782,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
       endif
 
       kv_top = topfn * kv_TBL(i)
-      a_cpl(i,K) = a_cpl(i,K) + kv_top / (GV%H_to_Z*h_shear + I_amax*kv_top)
+      a_cpl(i,K) = a_cpl(i,K) + kv_top / (h_shear + I_amax*kv_top)
     endif ; enddo ; enddo
 
   elseif (CS%dynamic_viscous_ML .or. (GV%nkml>0) .or. CS%fixed_LOTW_ML .or. CS%apply_LOTW_floor) then
@@ -1748,25 +1791,25 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
     u_star(:) = 0.0  ! Zero out the friction velocity on land points.
     if (work_on_u) then
       do I=is,ie ; if (do_i(I)) then
-        u_star(I) = 0.5*(forces%ustar(i,j) + forces%ustar(i+1,j)) * GV%Z_to_H
+        u_star(I) = 0.5*(forces%ustar(i,j) + forces%ustar(i+1,j))
         absf(I) = 0.5*(abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I,J)))
       endif ; enddo
       if (do_OBCs) then ; do I=is,ie ; if (do_i(I) .and. (OBC%segnum_u(I,j) /= OBC_NONE)) then
         if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_E) &
-          u_star(I) = forces%ustar(i,j) * GV%Z_to_H
+          u_star(I) = forces%ustar(i,j)
         if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_W) &
-          u_star(I) = forces%ustar(i+1,j) * GV%Z_to_H
+          u_star(I) = forces%ustar(i+1,j)
       endif ; enddo ; endif
     else
       do i=is,ie ; if (do_i(i)) then
-        u_star(i) = 0.5*(forces%ustar(i,j) + forces%ustar(i,j+1)) * GV%Z_to_H
+        u_star(i) = 0.5*(forces%ustar(i,j) + forces%ustar(i,j+1))
         absf(i) = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
       endif ; enddo
       if (do_OBCs) then ; do i=is,ie ; if (do_i(i) .and. (OBC%segnum_v(i,J) /= OBC_NONE)) then
         if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_N) &
-          u_star(i) = forces%ustar(i,j) * GV%Z_to_H
+          u_star(i) = forces%ustar(i,j)
         if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_S) &
-          u_star(i) = forces%ustar(i,j+1) * GV%Z_to_H
+          u_star(i) = forces%ustar(i,j+1)
       endif ; enddo ; endif
     endif
 
@@ -1849,7 +1892,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         !   The viscosity in visc_ml is set to go to 0 at the mixed layer top and bottom
         ! (in a log-layer) and be further limited by rotation to give the natural Ekman length.
         temp1 = (z_t(i)*h_ml(i) - z_t(i)*z_t(i))
-        ustar2_denom = (CS%vonKar * u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        ustar2_denom = (CS%vonKar * GV%Z_to_H*u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
         visc_ml = temp1 * ustar2_denom
         ! Set the viscous coupling based on the model's vertical resolution.  The omission of
         ! the I_amax factor here is consistent with answer dates above 20190101.
@@ -1869,7 +1912,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         z_t(i) = z_t(i) + hvel(i,k-1)
 
         temp1 = (z_t(i)*h_ml(i) - z_t(i)*z_t(i))
-        ustar2_denom = (CS%vonKar * u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        ustar2_denom = (CS%vonKar * GV%Z_to_H*u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
 
         ! As a floor on the viscous coupling, assume that the length scale in the denominator can not
         ! be larger than the distance from the surface, consistent with a logarithmic velocity profile.
@@ -1882,7 +1925,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         temp1 = (z_t(i)*h_ml(i) - z_t(i)*z_t(i))
         !   This viscosity is set to go to 0 at the mixed layer top and bottom (in a log-layer)
         ! and be further limited by rotation to give the natural Ekman length.
-        visc_ml = u_star(i) * CS%vonKar * (temp1*u_star(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        visc_ml = GV%Z_to_H*u_star(i) * CS%vonKar * (temp1*u_star(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
         a_ml = visc_ml / (0.25*(hvel(i,k)+hvel(i,k-1) + h_neglect) + 0.5*I_amax*visc_ml)
 
         ! Choose the largest estimate of a_cpl, but these could be changed to be additive.
@@ -2124,7 +2167,6 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
 
   real :: Kv_BBL  ! A viscosity in the bottom boundary layer with a simple scheme [H Z T-1 ~> m2 s-1 or Pa s]
   real :: Kv_back_z  ! A background kinematic viscosity [Z2 T-1 ~> m2 s-1]
-  real :: Hmix_z  ! A boundary layer thickness [Z ~> m].
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: default_2018_answers ! The default setting for the various 2018_ANSWERS flags.
   logical :: answers_2018   !< If true, use the order of arithmetic and expressions that recover the
@@ -2230,17 +2272,16 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
   call get_param(param_file, mdl, "DEBUG", CS%debug, default=.false.)
 
   if (GV%nkml < 1) then
-    call get_param(param_file, mdl, "HMIX_FIXED", Hmix_z, &
+    call get_param(param_file, mdl, "HMIX_FIXED", CS%Hmix, &
                  "The prescribed depth over which the near-surface viscosity and "//&
                  "diffusivity are elevated when the bulk mixed layer is not used.", &
                  units="m", scale=US%m_to_Z, fail_if_missing=.true.)
-    CS%Hmix = GV%Z_to_H * Hmix_z
   endif
   if (CS%direct_stress) then
     if (GV%nkml < 1) then
       call get_param(param_file, mdl, "HMIX_STRESS", CS%Hmix_stress, &
                  "The depth over which the wind stress is applied if DIRECT_STRESS is true.", &
-                 units="m", default=US%Z_to_m*Hmix_z, scale=GV%m_to_H)
+                 units="m", default=US%Z_to_m*CS%Hmix, scale=GV%m_to_H)
     else
       call get_param(param_file, mdl, "HMIX_STRESS", CS%Hmix_stress, &
                  "The depth over which the wind stress is applied if DIRECT_STRESS is true.", &
@@ -2318,7 +2359,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "which defines the range over which the GL90 coupling "//&
                  "coefficient is zeroed out, in order to avoid fluxing "//&
                  "momentum into vanished layers over steep topography.", &
-                 units="m", default=5.0, scale=GV%m_to_H, do_not_log=.not.CS%use_GL90_in_SSW)
+                 units="m", default=5.0, scale=US%m_to_Z, do_not_log=.not.CS%use_GL90_in_SSW)
 
   CS%Kvml_invZ2 = 0.0
   if (GV%nkml < 1) then
@@ -2374,7 +2415,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "KV_EXTRA_BBL if BOTTOMDRAGLAW is not defined, or the thickness over which "//&
                  "near-bottom velocities are averaged for the drag law if BOTTOMDRAGLAW is "//&
                  "defined but LINEAR_DRAG is not.", &
-                 units="m", fail_if_missing=.true., scale=GV%m_to_H)
+                 units="m", fail_if_missing=.true., scale=US%m_to_Z)
   call get_param(param_file, mdl, "MAXVEL", CS%maxvel, &
                  "The maximum velocity allowed before the velocity components are truncated.", &
                  units="m s-1", default=3.0e8, scale=US%m_s_to_L_T)
@@ -2469,11 +2510,11 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
 
   CS%id_hML_u = register_diag_field('ocean_model', 'HMLu_visc', diag%axesCu1, Time, &
       'Mixed Layer Thickness at Zonal Velocity Points for Viscosity', &
-      thickness_units, conversion=GV%H_to_MKS)
+      thickness_units, conversion=US%Z_to_m)
 
   CS%id_hML_v = register_diag_field('ocean_model', 'HMLv_visc', diag%axesCv1, Time, &
       'Mixed Layer Thickness at Meridional Velocity Points for Viscosity', &
-      thickness_units, conversion=GV%H_to_MKS)
+      thickness_units, conversion=US%Z_to_m)
 
   CS%id_du_dt_visc = register_diag_field('ocean_model', 'du_dt_visc', diag%axesCuL, Time, &
       'Zonal Acceleration from Vertical Viscosity', 'm s-2', conversion=US%L_T2_to_m_s2)
