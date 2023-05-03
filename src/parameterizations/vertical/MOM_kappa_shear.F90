@@ -3,18 +3,19 @@ module MOM_kappa_shear
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-use MOM_cpu_clock, only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
-use MOM_cpu_clock, only : CLOCK_MODULE_DRIVER, CLOCK_MODULE, CLOCK_ROUTINE
-use MOM_diag_mediator, only : post_data, register_diag_field, safe_alloc_ptr
-use MOM_diag_mediator, only : diag_ctrl, time_type
-use MOM_debugging, only : hchksum, Bchksum
-use MOM_error_handler, only : MOM_error, is_root_pe, FATAL, WARNING, NOTE
-use MOM_file_parser, only : get_param, log_version, param_file_type
-use MOM_grid, only : ocean_grid_type
-use MOM_unit_scaling, only : unit_scale_type
-use MOM_variables, only : thermo_var_ptrs
-use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density_derivs
+use MOM_cpu_clock,         only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
+use MOM_cpu_clock,         only : CLOCK_MODULE_DRIVER, CLOCK_MODULE, CLOCK_ROUTINE
+use MOM_diag_mediator,     only : post_data, register_diag_field, safe_alloc_ptr
+use MOM_diag_mediator,     only : diag_ctrl, time_type
+use MOM_debugging,         only : hchksum, Bchksum
+use MOM_error_handler,     only : MOM_error, is_root_pe, FATAL, WARNING, NOTE
+use MOM_file_parser,       only : get_param, log_version, param_file_type
+use MOM_grid,              only : ocean_grid_type
+use MOM_interface_heights, only : thickness_to_dz
+use MOM_unit_scaling,      only : unit_scale_type
+use MOM_variables,         only : thermo_var_ptrs
+use MOM_verticalGrid,      only : verticalGrid_type
+use MOM_EOS,               only : calculate_density_derivs
 
 implicit none ; private
 
@@ -145,6 +146,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
   ! Local variables
   real, dimension(SZI_(G),SZK_(GV)) :: &
     h_2d, &             ! A 2-D version of h [H ~> m or kg m-2].
+    dz_2d, &            ! Vertical distance between interface heights [Z ~> m].
     u_2d, v_2d, &       ! 2-D versions of u_in and v_in, converted to [L T-1 ~> m s-1].
     T_2d, S_2d, rho_2d  ! 2-D versions of T [C ~> degC], S [S ~> ppt], and rho [R ~> kg m-3].
   real, dimension(SZI_(G),SZK_(GV)+1) :: &
@@ -152,7 +154,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
     tke_2d      ! 2-D version tke_io [Z2 T-2 ~> m2 s-2].
   real, dimension(SZK_(GV)) :: &
     Idz, &      ! The inverse of the thickness of the merged layers [H-1 ~> m2 kg-1].
-    dz, &       ! The layer thickness [H ~> m or kg m-2]
+    h_lay, &    ! The layer thickness [H ~> m or kg m-2]
     dz_lay, &   ! The geometric layer thickness in height units [Z ~> m]
     u0xdz, &    ! The initial zonal velocity times dz [H L T-1 ~> m2 s-1 or kg m-1 s-1]
     v0xdz, &    ! The initial meridional velocity times dz [H L T-1 ~> m2 s-1 or kg m-1 s-1]
@@ -189,6 +191,10 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
   !$OMP parallel do default(private) shared(js,je,is,ie,nz,h,u_in,v_in,use_temperature,tv,G,GV,US, &
   !$OMP                                     CS,kappa_io,dz_massless,k0dt,p_surf,dt,tke_io,kv_io)
   do j=js,je
+
+    ! Convert layer thicknesses into geometric thickness in height units.
+    call thickness_to_dz(h, tv, dz_2d, j, G, GV)
+
     do k=1,nz ; do i=is,ie
       h_2d(i,k) = h(i,j,k)
       u_2d(i,k) = u_in(i,j,k) ; v_2d(i,k) = v_in(i,j,k)
@@ -204,26 +210,28 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
 !---------------------------------------
     do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
     ! call cpu_clock_begin(id_clock_setup)
+
       ! Store a transposed version of the initial arrays.
       ! Any elimination of massless layers would occur here.
       if (CS%eliminate_massless) then
         nzc = 1
         do k=1,nz
           ! Zero out the thicknesses of all layers, even if they are unused.
-          dz(k) = 0.0 ; u0xdz(k) = 0.0 ; v0xdz(k) = 0.0
+          h_lay(k) = 0.0 ; dz_lay(k) = 0.0 ; u0xdz(k) = 0.0 ; v0xdz(k) = 0.0
           T0xdz(k) = 0.0 ; S0xdz(k) = 0.0
 
           ! Add a new layer if this one has mass.
-!          if ((dz(nzc) > 0.0) .and. (h_2d(i,k) > dz_massless)) nzc = nzc+1
-          if ((k>CS%nkml) .and. (dz(nzc) > 0.0) .and. &
+!          if ((h_lay(nzc) > 0.0) .and. (h_2d(i,k) > dz_massless)) nzc = nzc+1
+          if ((k>CS%nkml) .and. (h_lay(nzc) > 0.0) .and. &
               (h_2d(i,k) > dz_massless)) nzc = nzc+1
 
           ! Only merge clusters of massless layers.
-!         if ((dz(nzc) > dz_massless) .or. &
-!             ((dz(nzc) > 0.0) .and. (h_2d(i,k) > dz_massless))) nzc = nzc+1
+!         if ((h_lay(nzc) > dz_massless) .or. &
+!             ((h_lay(nzc) > 0.0) .and. (h_2d(i,k) > dz_massless))) nzc = nzc+1
 
           kc(k) = nzc
-          dz(nzc) = dz(nzc) + h_2d(i,k)
+          h_lay(nzc) = h_lay(nzc) + h_2d(i,k)
+          dz_lay(nzc) = dz_lay(nzc) + dz_2d(i,k)
           u0xdz(nzc) = u0xdz(nzc) + u_2d(i,k)*h_2d(i,k)
           v0xdz(nzc) = v0xdz(nzc) + v_2d(i,k)*h_2d(i,k)
           if (use_temperature) then
@@ -237,7 +245,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
         kc(nz+1) = nzc+1
 
         ! Set up Idz as the inverse of layer thicknesses.
-        do k=1,nzc ; Idz(k) = 1.0 / dz(k) ; enddo
+        do k=1,nzc ; Idz(k) = 1.0 / h_lay(k) ; enddo
 
         !   Now determine kf, the fractional weight of interface kc when
         ! interpolating between interfaces kc and kc+1.
@@ -252,29 +260,22 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
         kf(nz+1) = 0.0
       else
         do k=1,nz
-          dz(k) = h_2d(i,k)
-          u0xdz(k) = u_2d(i,k)*dz(k) ; v0xdz(k) = v_2d(i,k)*dz(k)
+          h_lay(k) = h_2d(i,k)
+          dz_lay(k) = dz_2d(i,k)
+          u0xdz(k) = u_2d(i,k)*h_lay(k) ; v0xdz(k) = v_2d(i,k)*h_lay(k)
         enddo
         if (use_temperature) then
           do k=1,nz
-            T0xdz(k) = T_2d(i,k)*dz(k) ; S0xdz(k) = S_2d(i,k)*dz(k)
+            T0xdz(k) = T_2d(i,k)*h_lay(k) ; S0xdz(k) = S_2d(i,k)*h_lay(k)
           enddo
         else
           do k=1,nz
-            T0xdz(k) = rho_2d(i,k)*dz(k) ; S0xdz(k) = rho_2d(i,k)*dz(k)
+            T0xdz(k) = rho_2d(i,k)*h_lay(k) ; S0xdz(k) = rho_2d(i,k)*h_lay(k)
           enddo
         endif
         nzc = nz
         do k=1,nzc+1 ; kc(k) = k ; kf(k) = 0.0 ; enddo
       endif
-
-      ! Convert layer thicknesses into geometric thickness in height units.
-      ! In non-Boussinesq mode, this conversion should be done properly as an integral
-      ! of specific volume in depth.
-      do k=1,nzc
-        dz_lay(k) = GV%H_to_Z*dz(k)
-      enddo
-      do k=nzc+1,nz ; dz_lay(k) = 0.0 ; enddo
 
       f2 = 0.25 * ((G%CoriolisBu(I,j)**2 + G%CoriolisBu(I-1,J-1)**2) + &
                    (G%CoriolisBu(I,J-1)**2 + G%CoriolisBu(I-1,J)**2))
@@ -287,7 +288,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
       do K=1,nzc+1 ; kappa(K) = CS%kappa_seed ; enddo
 
       call kappa_shear_column(kappa, tke, dt, nzc, f2, surface_pres, &
-                              dz, dz_lay, u0xdz, v0xdz, T0xdz, S0xdz, kappa_avg, &
+                              h_lay, dz_lay, u0xdz, v0xdz, T0xdz, S0xdz, kappa_avg, &
                               tke_avg, tv, CS, GV, US)
 
     ! call cpu_clock_begin(id_clock_setup)
@@ -378,8 +379,11 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
                                                    !! call to kappa_shear_init.
 
   ! Local variables
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
+    dz_3d               ! Vertical distance between interface heights [Z ~> m].
   real, dimension(SZIB_(G),SZK_(GV)) :: &
     h_2d, &             ! A 2-D version of h [H ~> m or kg m-2].
+    dz_2d, &            ! Vertical distance between interface heights [Z ~> m].
     u_2d, v_2d, &       ! 2-D versions of u_in and v_in, converted to [L T-1 ~> m s-1].
     T_2d, S_2d, rho_2d  ! 2-D versions of T [C ~> degC], S [S ~> ppt], and rho [R ~> kg m-3].
   real, dimension(SZIB_(G),SZK_(GV)+1,2) :: &
@@ -388,7 +392,7 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
     tke_2d      ! 2-D version tke_io [Z2 T-2 ~> m2 s-2].
   real, dimension(SZK_(GV)) :: &
     Idz, &      ! The inverse of the thickness of the merged layers [H-1 ~> m2 kg-1].
-    dz, &       ! The layer thickness [H ~> m or kg m-2]
+    h_lay, &    ! The layer thickness [H ~> m or kg m-2]
     dz_lay, &   ! The geometric layer thickness in height units [Z ~> m]
     u0xdz, &    ! The initial zonal velocity times dz [L H T-1 ~> m2 s-1 or kg m-1 s-1].
     v0xdz, &    ! The initial meridional velocity times dz [H L T-1 ~> m2 s-1 or kg m-1 s-1]
@@ -426,6 +430,9 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
   dz_massless = 0.1*sqrt(GV%Z_to_H*k0dt)
   I_Prandtl = 0.0 ; if (CS%Prandtl_turb > 0.0) I_Prandtl = 1.0 / CS%Prandtl_turb
 
+  ! Convert layer thicknesses into geometric thickness in height units.
+  call thickness_to_dz(h, tv, dz_3d, G, GV, US, halo_size=1)
+
   !$OMP parallel do default(private) shared(jsB,jeB,isB,ieB,nz,h,u_in,v_in,use_temperature,tv,G,GV, &
   !$OMP                                US,CS,kappa_io,dz_massless,k0dt,p_surf,dt,tke_io,kv_io,I_Prandtl)
   do J=JsB,JeB
@@ -458,6 +465,10 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
                    (G%mask2dT(i+1,j) * h(i+1,j,k) + G%mask2dT(i,j+1) * h(i,j+1,k)) ) / &
                   ((G%mask2dT(i,j) + G%mask2dT(i+1,j+1)) + &
                    (G%mask2dT(i+1,j) + G%mask2dT(i,j+1)) + 1.0e-36 )
+      dz_2d(I,k) = ((G%mask2dT(i,j) * dz_3d(i,j,k) + G%mask2dT(i+1,j+1) * dz_3d(i+1,j+1,k)) + &
+                    (G%mask2dT(i+1,j) * dz_3d(i+1,j,k) + G%mask2dT(i,j+1) * dz_3d(i,j+1,k)) ) / &
+                   ((G%mask2dT(i,j) + G%mask2dT(i+1,j+1)) + &
+                    (G%mask2dT(i+1,j) + G%mask2dT(i,j+1)) + 1.0e-36 )
 !      h_2d(I,k) = 0.25*((h(i,j,k) + h(i+1,j+1,k)) + (h(i+1,j,k) + h(i,j+1,k)))
 !      h_2d(I,k) = ((h(i,j,k)**2 + h(i+1,j+1,k)**2) + &
 !                   (h(i+1,j,k)**2 + h(i,j+1,k)**2)) * I_hwt
@@ -478,20 +489,21 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
         nzc = 1
         do k=1,nz
           ! Zero out the thicknesses of all layers, even if they are unused.
-          dz(k) = 0.0 ; u0xdz(k) = 0.0 ; v0xdz(k) = 0.0
+          h_lay(k) = 0.0 ; dz_lay(k) = 0.0 ; u0xdz(k) = 0.0 ; v0xdz(k) = 0.0
           T0xdz(k) = 0.0 ; S0xdz(k) = 0.0
 
           ! Add a new layer if this one has mass.
-!          if ((dz(nzc) > 0.0) .and. (h_2d(I,k) > dz_massless)) nzc = nzc+1
-          if ((k>CS%nkml) .and. (dz(nzc) > 0.0) .and. &
+!          if ((h_lay(nzc) > 0.0) .and. (h_2d(I,k) > dz_massless)) nzc = nzc+1
+          if ((k>CS%nkml) .and. (h_lay(nzc) > 0.0) .and. &
               (h_2d(I,k) > dz_massless)) nzc = nzc+1
 
           ! Only merge clusters of massless layers.
-!         if ((dz(nzc) > dz_massless) .or. &
-!             ((dz(nzc) > 0.0) .and. (h_2d(I,k) > dz_massless))) nzc = nzc+1
+!         if ((h_lay(nzc) > dz_massless) .or. &
+!             ((h_lay(nzc) > 0.0) .and. (h_2d(I,k) > dz_massless))) nzc = nzc+1
 
           kc(k) = nzc
-          dz(nzc) = dz(nzc) + h_2d(I,k)
+          h_lay(nzc) = h_lay(nzc) + h_2d(I,k)
+          dz_lay(nzc) = dz_lay(nzc) + dz_2d(I,k)
           u0xdz(nzc) = u0xdz(nzc) + u_2d(I,k)*h_2d(I,k)
           v0xdz(nzc) = v0xdz(nzc) + v_2d(I,k)*h_2d(I,k)
           if (use_temperature) then
@@ -505,7 +517,7 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
         kc(nz+1) = nzc+1
 
         ! Set up Idz as the inverse of layer thicknesses.
-        do k=1,nzc ; Idz(k) = 1.0 / dz(k) ; enddo
+        do k=1,nzc ; Idz(k) = 1.0 / h_lay(k) ; enddo
 
         !   Now determine kf, the fractional weight of interface kc when
         ! interpolating between interfaces kc and kc+1.
@@ -520,16 +532,17 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
         kf(nz+1) = 0.0
       else
         do k=1,nz
-          dz(k) = h_2d(I,k)
-          u0xdz(k) = u_2d(I,k)*dz(k) ; v0xdz(k) = v_2d(I,k)*dz(k)
+          h_lay(k) = h_2d(I,k)
+          dz_lay(k) = dz_2d(I,k)
+          u0xdz(k) = u_2d(I,k)*h_lay(k) ; v0xdz(k) = v_2d(I,k)*h_lay(k)
         enddo
         if (use_temperature) then
           do k=1,nz
-            T0xdz(k) = T_2d(I,k)*dz(k) ; S0xdz(k) = S_2d(I,k)*dz(k)
+            T0xdz(k) = T_2d(I,k)*h_lay(k) ; S0xdz(k) = S_2d(I,k)*h_lay(k)
           enddo
         else
           do k=1,nz
-            T0xdz(k) = rho_2d(I,k)*dz(k) ; S0xdz(k) = rho_2d(I,k)*dz(k)
+            T0xdz(k) = rho_2d(I,k)*h_lay(k) ; S0xdz(k) = rho_2d(I,k)*h_lay(k)
           enddo
         endif
         nzc = nz
@@ -551,21 +564,13 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
         endif
       endif
 
-      ! Convert layer thicknesses into geometric thickness in height units.
-      ! In non-Boussinesq mode, this conversion should be done properly as an integral
-      ! of specific volume in depth.
-      do k=1,nzc
-        dz_lay(k) = GV%H_to_Z*dz(k)
-      enddo
-      do k=nzc+1,nz ; dz_lay(k) = 0.0 ; enddo
-
     ! ----------------------------------------------------
     ! Set the initial guess for kappa, here defined at interfaces.
     ! ----------------------------------------------------
       do K=1,nzc+1 ; kappa(K) = CS%kappa_seed ; enddo
 
       call kappa_shear_column(kappa, tke, dt, nzc, f2, surface_pres, &
-                              dz, dz_lay, u0xdz, v0xdz, T0xdz, S0xdz, kappa_avg, &
+                              h_lay, dz_lay, u0xdz, v0xdz, T0xdz, S0xdz, kappa_avg, &
                               tke_avg, tv, CS, GV, US)
     ! call cpu_clock_begin(Id_clock_setup)
     ! Extrapolate from the vertically reduced grid back to the original layers.
@@ -1289,6 +1294,8 @@ subroutine find_kappa_tke(N2, S2, kappa_in, Idz, h_Int, dz_Int, dz_h_Int, I_L2_b
   real :: diffusive_src ! The diffusive source in the kappa equation [H T-1 ~> m s-1 or kg m-2 s-1]
   real :: chg_by_k0     ! The value of k_src that leads to an increase of
                         ! kappa_0 if only the diffusive term is a sink [T-1 ~> s-1]
+  real :: h_dz_here     ! The ratio of the thicknesses to the vertical distances around an interface
+                        ! [H Z-1 ~> nondim or kg m-3].  In non-Boussinesq mode this is the density.
 
   real :: kappa_mean    ! A mean value of kappa [H Z T-1 ~> m2 s-1 or Pa s]
   real :: Newton_test   ! The value of relative error that will cause the next
@@ -1691,8 +1698,9 @@ subroutine find_kappa_tke(N2, S2, kappa_in, Idz, h_Int, dz_Int, dz_h_Int, I_L2_b
                      h_Int(K)*I_Ld2_debug(K)*dK(K) - kap_src - &
                      dz_Int(K)*(N2(K)*Ilambda2 + f2)*I_Q**2*kappa_prev(K) * dQ(K)
 
+        h_dz_here = 0.0 ; if (abs(dz_h_Int(K)) > 0.0) h_dz_here = 1.0 / dz_h_Int(K)
         tke_src = h_Int(K) * ((kappa_prev(K) + kappa0)*S2(K) - &
-                     kappa_prev(K)*N2(K) - (TKE_prev(K) - q0)*GV%Z_to_H*TKE_decay(K)) - &
+                     kappa_prev(K)*N2(K) - (TKE_prev(K) - q0)*h_dz_here*TKE_decay(K)) - &
                   (aQ(k) * (TKE_prev(K) - TKE_prev(K+1)) - aQ(k-1) * (TKE_prev(K-1) - TKE_prev(K)))
         Q_err_lin = tke_src + (aQ(k-1) * (dQ(K-1)-dQ(K)) - aQ(k) * (dQ(k)-dQ(k+1))) - &
                     0.5*(TKE_prev(K)-TKE_prev(K+1))*Idz(k)  * (dK(K) + dK(K+1)) - &
