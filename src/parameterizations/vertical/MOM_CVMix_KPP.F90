@@ -115,7 +115,7 @@ type, public :: KPP_CS ; private
   real    :: KPP_VT2_ENH_FAC           !< Factor to multiply by VT2 if Method is CONSTANT [nondim]
   real    :: MLD_guess_min             !< The minimum estimate of the mixed layer depth used to
                                        !! calculate the Langmuir number for Langmuir turbulence
-                                       !! enhancement with KPP [H ~> m or kg m-2]
+                                       !! enhancement with KPP [Z ~> m]
   logical :: STOKES_MIXING             !< Flag if model is mixing down Stokes gradient
                                        !! This is relevant for which current to use in RiB
 
@@ -468,7 +468,7 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
     call get_param(paramFile, mdl, "KPP_LT_MLD_GUESS_MIN", CS%MLD_guess_min,     &
                    "The minimum estimate of the mixed layer depth used to calculate "//&
                    "the Langmuir number for Langmuir turbulence enhancement with KPP.", &
-                   units="m", default=1.0, scale=GV%m_to_H)
+                   units="m", default=1.0, scale=US%m_to_Z)
   endif
 
   call closeParameterBlock(paramFile)
@@ -976,7 +976,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   ! For Langmuir Calculations
   real :: LangEnhVt2   ! Langmuir enhancement for unresolved shear [nondim]
   real, dimension(GV%ke) :: U_H, V_H ! Velocities at tracer points [L T-1 ~> m s-1]
-  real :: MLD_guess    ! A guess at the mixed layer depth for calculating the Langmuir number [H ~> m or kg m-2]
+  real :: MLD_guess    ! A guess at the mixed layer depth for calculating the Langmuir number [Z ~> m]
   real :: LA           ! The local Langmuir number [nondim]
   real :: surfHuS, surfHvS ! Stokes drift velocities integrated over the boundary
                            ! layer [H L T-1 ~> m2 s-1 or kg m-1 s-1]
@@ -1130,9 +1130,9 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
       enddo ! k-loop finishes
 
       if ( (CS%LT_K_ENHANCEMENT .or. CS%LT_VT2_ENHANCEMENT) .and. .not. present(lamult)) then
-        MLD_guess = max( CS%MLD_guess_min, abs(CS%OBLdepthprev(i,j) ) )
+        MLD_guess = max( CS%MLD_guess_min, abs(GV%H_to_Z*CS%OBLdepthprev(i,j) ) )
         call get_Langmuir_Number(LA, G, GV, US, MLD_guess, uStar(i,j), i, j, &
-                                 H=H(i,j,:), U_H=U_H, V_H=V_H, WAVES=WAVES)
+                                 dz=GV%H_to_Z*H(i,j,:), U_H=U_H, V_H=V_H, WAVES=WAVES)
         CS%La_SL(i,j) = LA
       endif
 

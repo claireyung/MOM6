@@ -847,7 +847,7 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
 
       !/ Here we get MStar, which is the ratio of convective TKE driven mixing to UStar**3
       if (CS%Use_LT) then
-        call get_Langmuir_Number(LA, G, GV, US, abs(GV%Z_to_H*MLD_guess), u_star_mean, i, j, h, Waves, &
+        call get_Langmuir_Number(LA, G, GV, US, abs(MLD_guess), u_star_mean, i, j, dz, Waves, &
                                  U_H=u, V_H=v)
         call find_mstar(CS, US, B_flux, u_star, u_star_Mean, MLD_guess, absf, &
                         MStar_total, Langmuir_Number=La, Convect_Langmuir_Number=LAmod,&

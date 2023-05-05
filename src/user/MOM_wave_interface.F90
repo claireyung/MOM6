@@ -147,7 +147,7 @@ type, public :: wave_parameters_CS ; private
 
   ! Options for computing Langmuir number
   real :: LA_FracHBL         !< Fraction of OSBL for averaging Langmuir number [nondim]
-  real :: LA_HBL_min         !< Minimum boundary layer depth for averaging Langmuir number [H ~> m or kg m-2]
+  real :: LA_HBL_min         !< Minimum boundary layer depth for averaging Langmuir number [Z ~> m]
   logical :: LA_Misalignment = .false. !< Flag to use misalignment in Langmuir number
 
   integer :: NumBands = 0      !< Number of wavenumber/frequency partitions to receive
@@ -329,7 +329,7 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag, restar
                  units="nondim", default=0.04)
   call get_param(param_file, mdl, "LA_DEPTH_MIN", CS%LA_HBL_min, &
                  "The minimum depth over which to average the Stokes drift in the Langmuir "//&
-                 "number calculation.", units="m", default=0.1, scale=GV%m_to_H)
+                 "number calculation.", units="m", default=0.1, scale=US%m_to_Z)
 
   if (StatisticalWaves) then
     CS%WaveMethod = LF17
@@ -712,13 +712,13 @@ end subroutine Update_Surface_Waves
 
 !> Constructs the Stokes Drift profile on the model grid based on
 !! desired coupling options
-subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
+subroutine Update_Stokes_Drift(G, GV, US, CS, dz, ustar, dt, dynamics_step)
   type(wave_parameters_CS), pointer       :: CS    !< Wave parameter Control structure
   type(ocean_grid_type),    intent(inout) :: G     !< Grid structure
   type(verticalGrid_type),  intent(in)    :: GV    !< Vertical grid structure
   type(unit_scale_type),    intent(in)    :: US    !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                            intent(in)    :: h     !< Thickness [H ~> m or kg m-2]
+                            intent(in)    :: dz    !< Thickness in height units [Z ~> m]
   real, dimension(SZI_(G),SZJ_(G)), &
                             intent(in)    :: ustar !< Wind friction velocity [Z T-1 ~> m s-1].
   real, intent(in)                        :: dt    !< Time-step for computing Stokes-tendency [T ~> s]
@@ -754,8 +754,8 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
         MidPoint = 0.0
         do kk = 1,GV%ke
           Top = Bottom
-          MidPoint = Bottom - GV%H_to_Z*0.25*(h(II,jj,kk)+h(IIm1,jj,kk))
-          Bottom = Bottom - GV%H_to_Z*0.5*(h(II,jj,kk)+h(IIm1,jj,kk))
+          MidPoint = Bottom - 0.25*(dz(II,jj,kk)+dz(IIm1,jj,kk))
+          Bottom = Bottom - 0.5*(dz(II,jj,kk)+dz(IIm1,jj,kk))
           CS%Us_x(II,jj,kk) = CS%TP_STKX0*exp(MidPoint*DecayScale)
         enddo
       enddo
@@ -767,8 +767,8 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
         MidPoint = 0.0
         do kk = 1,GV%ke
           Top = Bottom
-          MidPoint = Bottom - GV%H_to_Z*0.25*(h(ii,JJ,kk)+h(ii,JJm1,kk))
-          Bottom = Bottom - GV%H_to_Z*0.5*(h(ii,JJ,kk)+h(ii,JJm1,kk))
+          MidPoint = Bottom - 0.25*(dz(ii,JJ,kk)+dz(ii,JJm1,kk))
+          Bottom = Bottom - 0.5*(dz(ii,JJ,kk)+dz(ii,JJm1,kk))
           CS%Us_y(ii,JJ,kk) = CS%TP_STKY0*exp(MidPoint*DecayScale)
         enddo
       enddo
@@ -795,7 +795,7 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
         do kk = 1,GV%ke
           Top = Bottom
           IIm1 = max(II-1,1)
-          level_thick = 0.5*GV%H_to_Z*(h(II,jj,kk)+h(IIm1,jj,kk))
+          level_thick = 0.5*(dz(II,jj,kk)+dz(IIm1,jj,kk))
           MidPoint = Top - 0.5*level_thick
           Bottom = Top - level_thick
 
@@ -853,7 +853,7 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
         do kk = 1,GV%ke
           Top = Bottom
           JJm1 = max(JJ-1,1)
-          level_thick = 0.5*GV%H_to_Z*(h(ii,JJ,kk)+h(ii,JJm1,kk))
+          level_thick = 0.5*(dz(ii,JJ,kk)+dz(ii,JJm1,kk))
           MidPoint = Top - 0.5*level_thick
           Bottom = Top - level_thick
 
@@ -907,8 +907,8 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
           do kk = 1,GV%ke
             Top = Bottom
             IIm1 = max(II-1,1)
-            MidPoint = Top - GV%H_to_Z*0.25*(h(II,jj,kk)+h(IIm1,jj,kk))
-            Bottom = Top - GV%H_to_Z*0.5*(h(II,jj,kk)+h(IIm1,jj,kk))
+            MidPoint = Top - 0.25*(dz(II,jj,kk)+dz(IIm1,jj,kk))
+            Bottom = Top - 0.5*(dz(II,jj,kk)+dz(IIm1,jj,kk))
             !bgr note that this is using a u-point ii on h-point ustar
             !    this code has only been previous used for uniform
             !    grid cases.  This needs fixed if DHH85 is used for non
@@ -925,8 +925,8 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
           do kk=1, GV%ke
             Top = Bottom
             JJm1 = max(JJ-1,1)
-            MidPoint = Bottom - GV%H_to_Z*0.25*(h(ii,JJ,kk)+h(ii,JJm1,kk))
-            Bottom = Bottom - GV%H_to_Z*0.5*(h(ii,JJ,kk)+h(ii,JJm1,kk))
+            MidPoint = Bottom - 0.25*(dz(ii,JJ,kk)+dz(ii,JJm1,kk))
+            Bottom = Bottom - 0.5*(dz(ii,JJ,kk)+dz(ii,JJm1,kk))
             !bgr note that this is using a v-point jj on h-point ustar
             !    this code has only been previous used for uniform
             !    grid cases.  This needs fixed if DHH85 is used for non
@@ -964,8 +964,8 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar, dt, dynamics_step)
   ! in the routine it is needed by (e.g. KPP or ePBL).
   do jj = G%jsc, G%jec
     do ii = G%isc,G%iec
-      call get_Langmuir_Number( La, G, GV, US, h(ii,jj,1), ustar(ii,jj), ii, jj, &
-             h(ii,jj,:), CS, Override_MA=.false.)
+      call get_Langmuir_Number( La, G, GV, US, dz(ii,jj,1), ustar(ii,jj), ii, jj, &
+             dz(ii,jj,:), CS, Override_MA=.false.)
       CS%La_turb(ii,jj) = La
     enddo
   enddo
@@ -1136,17 +1136,17 @@ end subroutine Surface_Bands_by_data_override
 !! Note this can be called with an unallocated Waves pointer, which is okay if we
 !!  want the wind-speed only dependent Langmuir number.  Therefore, we need to be
 !!  careful about what we try to access here.
-subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
+subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, dz, Waves, &
                                 U_H, V_H, Override_MA )
   type(ocean_grid_type),     intent(in)  :: G     !< Ocean grid structure
   type(verticalGrid_type),   intent(in)  :: GV    !< Ocean vertical grid structure
   real,                      intent(out) :: LA    !< Langmuir number [nondim]
   type(unit_scale_type),     intent(in)  :: US    !< A dimensional unit scaling type
-  real,                      intent(in)  :: HBL   !< (Positive) thickness of boundary layer [H ~> m or kg m-2]
+  real,                      intent(in)  :: HBL   !< (Positive) thickness of boundary layer [Z ~> m]
   real,                      intent(in)  :: ustar !< Friction velocity [Z T-1 ~> m s-1]
   integer,                   intent(in)  :: i     !< Meridional index of h-point
   integer,                   intent(in)  :: j     !< Zonal index of h-point
-  real, dimension(SZK_(GV)), intent(in)  :: h     !< Grid layer thickness [H ~> m or kg m-2]
+  real, dimension(SZK_(GV)), intent(in)  :: dz    !< Grid layer thickness [Z ~> m]
   type(Wave_parameters_CS),  pointer     :: Waves !< Surface wave control structure.
   real, dimension(SZK_(GV)), &
                    optional, intent(in)  :: U_H   !< Zonal velocity at H point [L T-1 ~> m s-1] or [m s-1]
@@ -1159,8 +1159,8 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
 
 
 !Local Variables
-  real :: Top, bottom, midpoint  ! Positions within each layer [H ~> m or kg m-2]
-  real :: Dpt_LASL         ! Averaging depth for Stokes drift [H ~> m or kg m-2]
+  real :: Top, Bottom, MidPoint  ! Positions within each layer [Z ~> m]
+  real :: Dpt_LASL         ! Averaging depth for Stokes drift [Z ~> m]
   real :: ShearDirection   ! Shear angular direction from atan2 [radians]
   real :: WaveDirection    ! Wave angular direction from atan2 [radians]
   real :: LA_STKx, LA_STKy, LA_STK ! Stokes velocities in [L T-1 ~> m s-1]
@@ -1183,9 +1183,11 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
     bottom = 0.0
     do kk = 1,GV%ke
       Top = Bottom
-      MidPoint = Bottom + 0.5*h(kk)
-      Bottom = Bottom + h(kk)
+      MidPoint = Bottom + 0.5*dz(kk)
+      Bottom = Bottom + dz(kk)
       !### Given the sign convention that Dpt_LASL is negative, the next line seems to have a bug.
+      !    To correct this bug, this line should be changed to:
+      ! if (MidPoint > abs(Dpt_LASL) .and. (kk > 1) .and. ContinueLoop) then
       if (MidPoint > Dpt_LASL .and. kk > 1 .and. ContinueLoop) then
         ShearDirection = atan2(V_H(1)-V_H(kk),U_H(1)-U_H(kk))
         ContinueLoop = .false.
@@ -1198,8 +1200,8 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
       US_H(kk) = 0.5*(Waves%US_X(I,j,kk)+Waves%US_X(I-1,j,kk))
       VS_H(kk) = 0.5*(Waves%US_Y(i,J,kk)+Waves%US_Y(i,J-1,kk))
     enddo
-    call Get_SL_Average_Prof( GV, Dpt_LASL, h, US_H, LA_STKx)
-    call Get_SL_Average_Prof( GV, Dpt_LASL, h, VS_H, LA_STKy)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, dz, US_H, LA_STKx)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, dz, VS_H, LA_STKy)
     LA_STK = sqrt(LA_STKX*LA_STKX+LA_STKY*LA_STKY)
   elseif (Waves%WaveMethod==SURFBANDS) then
     allocate(StkBand_X(Waves%NumBands), StkBand_Y(Waves%NumBands))
@@ -1207,8 +1209,8 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
       StkBand_X(bb) = 0.5*(Waves%STKx0(I,j,bb)+Waves%STKx0(I-1,j,bb))
       StkBand_Y(bb) = 0.5*(Waves%STKy0(i,J,bb)+Waves%STKy0(i,J-1,bb))
     enddo
-    call Get_SL_Average_Band(GV, GV%H_to_Z*Dpt_LASL, Waves%NumBands, Waves%WaveNum_Cen, StkBand_X, LA_STKx )
-    call Get_SL_Average_Band(GV, GV%H_to_Z*Dpt_LASL, Waves%NumBands, Waves%WaveNum_Cen, StkBand_Y, LA_STKy )
+    call Get_SL_Average_Band(GV, Dpt_LASL, Waves%NumBands, Waves%WaveNum_Cen, StkBand_X, LA_STKx )
+    call Get_SL_Average_Band(GV, Dpt_LASL, Waves%NumBands, Waves%WaveNum_Cen, StkBand_Y, LA_STKy )
     LA_STK = sqrt(LA_STKX**2 + LA_STKY**2)
     deallocate(StkBand_X, StkBand_Y)
   elseif (Waves%WaveMethod==DHH85) then
@@ -1217,8 +1219,8 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
       US_H(kk) = 0.5*(Waves%US_X(I,j,kk)+Waves%US_X(I-1,j,kk))
       VS_H(kk) = 0.5*(Waves%US_Y(i,J,kk)+Waves%US_Y(i,J-1,kk))
     enddo
-    call Get_SL_Average_Prof( GV, Dpt_LASL, h, US_H, LA_STKx)
-    call Get_SL_Average_Prof( GV, Dpt_LASL, h, VS_H, LA_STKy)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, dz, US_H, LA_STKx)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, dz, VS_H, LA_STKy)
     LA_STK = sqrt(LA_STKX**2 + LA_STKY**2)
   elseif (Waves%WaveMethod==LF17) then
     call get_StokesSL_LiFoxKemper(ustar, HBL*Waves%LA_FracHBL, GV, US, Waves, LA_STK, LA)
@@ -1285,7 +1287,7 @@ end function get_wave_method
 !! - BGR note: fixed parameter values should be changed to "get_params"
 subroutine get_StokesSL_LiFoxKemper(ustar, hbl, GV, US, CS, UStokes_SL, LA)
   real, intent(in)  :: ustar !< water-side surface friction velocity [Z T-1 ~> m s-1].
-  real, intent(in)  :: hbl   !< boundary layer depth [H ~> m or kg m-2].
+  real, intent(in)  :: hbl   !< boundary layer depth [Z ~> m].
   type(verticalGrid_type), intent(in) :: GV !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
   type(wave_parameters_CS), pointer   :: CS  !< Wave parameter Control structure
@@ -1351,7 +1353,7 @@ subroutine get_StokesSL_LiFoxKemper(ustar, hbl, GV, US, CS, UStokes_SL, LA)
     !         (GV%g_Earth * u10**2)
 
     ! surface layer
-    z0 = abs(GV%H_to_Z*hbl)
+    z0 = abs(hbl)
 
     if (CS%answer_date < 20230102) then
       z0i = 1.0 / z0
@@ -1405,20 +1407,20 @@ subroutine get_StokesSL_LiFoxKemper(ustar, hbl, GV, US, CS, UStokes_SL, LA)
 end subroutine Get_StokesSL_LiFoxKemper
 
 !> Get SL Averaged Stokes drift from a Stokes drift Profile
-subroutine Get_SL_Average_Prof( GV, AvgDepth, H, Profile, Average )
+subroutine Get_SL_Average_Prof( GV, AvgDepth, dz, Profile, Average )
   type(verticalGrid_type),  &
        intent(in)   :: GV       !< Ocean vertical grid structure
-  real, intent(in)  :: AvgDepth !< Depth to average over (negative) [H ~> m or kg m-2]
+  real, intent(in)  :: AvgDepth !< Depth to average over (negative) [Z ~> m]
   real, dimension(SZK_(GV)), &
-       intent(in)   :: H        !< Grid thickness [H ~> m or kg m-2]
+       intent(in)   :: dz       !< Grid thickness [Z ~> m]
   real, dimension(SZK_(GV)), &
        intent(in)   :: Profile  !< Profile of quantity to be averaged in arbitrary units [A]
                                 !! (used here for Stokes drift)
   real, intent(out) :: Average  !< Output quantity averaged over depth AvgDepth [A]
                                 !! (used here for Stokes drift)
   !Local variables
-  real :: top, midpoint, bottom ! Depths, negative downward [H ~> m or kg m-2]
-  real :: Sum  ! The depth weighted vertical sum of a quantity [A H ~> A m or A kg m-2]
+  real :: Top, Bottom ! Depths, negative downward [Z ~> m]
+  real :: Sum  ! The depth weighted vertical sum of a quantity [A Z ~> A m]
   integer :: kk
 
   ! Initializing sum
@@ -1428,10 +1430,9 @@ subroutine Get_SL_Average_Prof( GV, AvgDepth, H, Profile, Average )
   bottom = 0.0
   do kk = 1, GV%ke
     Top = Bottom
-    MidPoint = Bottom - 0.5*h(kk)
-    Bottom = Bottom - h(kk)
+    Bottom = Bottom - dz(kk)
     if (AvgDepth < Bottom) then ! The whole cell is within H_LA
-      Sum = Sum + Profile(kk) * H(kk)
+      Sum = Sum + Profile(kk) * dz(kk)
     elseif (AvgDepth < Top) then ! A partial cell is within H_LA
       Sum = Sum + Profile(kk) * (Top-AvgDepth)
       exit
@@ -1545,7 +1546,7 @@ end subroutine DHH85_mid
 
 !> Explicit solver for Stokes mixing.
 !! Still in development do not use.
-subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
+subroutine StokesMixing(G, GV, dt, h, dz, u, v, Waves )
   type(ocean_grid_type), &
        intent(in)    :: G     !< Ocean grid
   type(verticalGrid_type), &
@@ -1553,6 +1554,8 @@ subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
   real, intent(in)   :: dt    !< Time step of MOM6 [T ~> s] for explicit solver
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
        intent(in)    :: h     !< Layer thicknesses [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+       intent(in)    :: dz    !< Vertical distance between interfaces around a layer [Z ~> m]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
        intent(inout) :: u     !< Velocity i-component [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
@@ -1562,6 +1565,7 @@ subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
   ! Local variables
   real :: dTauUp, dTauDn ! Vertical momentum fluxes [H L T-2 ~> m2 s-2 or Pa]
   real :: h_lay  ! The layer thickness at a velocity point [H ~> m or kg m-2]
+  real :: dz_lay ! The distance between interfaces at a velocity point [Z ~> m]
   integer :: i, j, k
 
 ! This is a template to think about down-Stokes mixing.
@@ -1571,16 +1575,17 @@ subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
     do j = G%jsc, G%jec
       do I = G%iscB, G%iecB
         h_lay = 0.5*(h(i,j,k)+h(i+1,j,k))
+        dz_lay = 0.5*(dz(i,j,k)+dz(i+1,j,k))
         dTauUp = 0.0
         if (k > 1) &
-          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i+1,j,k)) * GV%Z_to_H) * &
+          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i+1,j,k))) * &
                (waves%us_x(i,j,k-1)-waves%us_x(i,j,k)) / &
-               (0.5*(h_lay + 0.5*(h(i,j,k-1)+h(i+1,j,k-1)) ))
+               (0.5*(dz_lay + 0.5*(dz(i,j,k-1)+dz(i+1,j,k-1)) ))
         dTauDn = 0.0
         if (k < GV%ke-1) &
-          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i+1,j,k+1)) * GV%Z_to_H) * &
+          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i+1,j,k+1))) * &
                (waves%us_x(i,j,k)-waves%us_x(i,j,k+1)) / &
-               (0.5*(h_lay + 0.5*(h(i,j,k+1)+h(i+1,j,k+1)) ))
+               (0.5*(dz_lay + 0.5*(dz(i,j,k+1)+dz(i+1,j,k+1)) ))
         u(i,j,k) = u(i,j,k) + dt * (dTauUp-dTauDn) / h_lay
       enddo
     enddo
@@ -1590,16 +1595,17 @@ subroutine StokesMixing(G, GV, dt, h, u, v, Waves )
     do J = G%jscB, G%jecB
       do i = G%isc, G%iec
         h_lay = 0.5*(h(i,j,k)+h(i,j+1,k))
+        dz_lay = 0.5*(dz(i,j,k)+dz(i,j+1,k))
         dTauUp = 0.
         if (k > 1) &
-          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i,j+1,k)) * GV%Z_to_H) * &
+          dTauUp = (0.5*(waves%Kvs(i,j,k)+waves%Kvs(i,j+1,k))) * &
                (waves%us_y(i,j,k-1)-waves%us_y(i,j,k)) / &
-               (0.5*(h_lay + 0.5*(h(i,j,k-1)+h(i,j+1,k-1)) ))
+               (0.5*(dz_lay + 0.5*(dz(i,j,k-1)+dz(i,j+1,k-1)) ))
         dTauDn = 0.0
         if (k < GV%ke-1) &
-          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i,j+1,k+1)) * GV%Z_to_H) * &
+          dTauDn = (0.5*(waves%Kvs(i,j,k+1)+waves%Kvs(i,j+1,k+1))) * &
                (waves%us_y(i,j,k)-waves%us_y(i,j,k+1)) / &
-               (0.5*(h_lay + 0.5*(h(i,j,k+1)+h(i,j+1,k+1)) ))
+               (0.5*(dz_lay + 0.5*(dz(i,j,k+1)+dz(i,j+1,k+1)) ))
         v(i,J,k) = v(i,J,k) + dt * (dTauUp-dTauDn) / h_lay
       enddo
     enddo
@@ -1657,7 +1663,7 @@ end subroutine CoriolisStokes
 !! including analytical integration of Stokes shear using multiple-exponential decay
 !! Stokes drift profile and vertical integration of the resulting pressure
 !! anomaly to the total pressure gradient force
-subroutine Stokes_PGF(G, GV, US, h, u, v, PFu_Stokes, PFv_Stokes, CS )
+subroutine Stokes_PGF(G, GV, US, dz, u, v, PFu_Stokes, PFv_Stokes, CS )
   type(ocean_grid_type), &
        intent(in)    :: G     !< Ocean grid
   type(verticalGrid_type), &
@@ -1665,7 +1671,7 @@ subroutine Stokes_PGF(G, GV, US, h, u, v, PFu_Stokes, PFv_Stokes, CS )
   type(unit_scale_type), &
        intent(in)    :: US    !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)),&
-       intent(in)    :: h       !< Layer thicknesses [H ~> m or kg m-2]
+       intent(in)    :: dz      !< Layer thicknesses in height units [Z ~> m]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), &
        intent(in) :: u          !< Lagrangian Velocity i-component [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(G)), &
@@ -1738,8 +1744,8 @@ subroutine Stokes_PGF(G, GV, US, h, u, v, PFu_Stokes, PFv_Stokes, CS )
       zi_l(1) = 0.0
       zi_r(1) = 0.0
       do k = 1, G%ke
-        h_l = h(i,j,k)*GV%H_to_Z
-        h_r = h(i+1,j,k)*GV%H_to_Z
+        h_l = dz(i,j,k)
+        h_r = dz(i+1,j,k)
         zi_l(k+1) = zi_l(k) - h_l
         zi_r(k+1) = zi_r(k) - h_r
         !### If the code were properly refactored, the following hard-coded constants would be unnecessary.
@@ -1832,8 +1838,8 @@ subroutine Stokes_PGF(G, GV, US, h, u, v, PFu_Stokes, PFv_Stokes, CS )
       zi_l(1) = 0.0
       zi_r(1) = 0.0
       do k = 1, G%ke
-        h_l = h(i,j,k)*GV%H_to_Z
-        h_r = h(i,j+1,k)*GV%H_to_Z
+        h_l = dz(i,j,k)
+        h_r = dz(i,j+1,k)
         zi_l(k+1) = zi_l(k) - h_l
         zi_r(k+1) = zi_r(k) - h_r
         !### If the code were properly refactored, the following hard-coded constants would be unnecessary.

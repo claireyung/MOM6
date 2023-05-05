@@ -91,7 +91,7 @@ use MOM_grid,                  only : ocean_grid_type, MOM_grid_init, MOM_grid_e
 use MOM_grid,                  only : set_first_direction, rescale_grid_bathymetry
 use MOM_hor_index,             only : hor_index_type, hor_index_init
 use MOM_hor_index,             only : rotate_hor_index
-use MOM_interface_heights,     only : find_eta, calc_derived_thermo
+use MOM_interface_heights,     only : find_eta, calc_derived_thermo, thickness_to_dz
 use MOM_interface_filter,      only : interface_filter, interface_filter_init, interface_filter_end
 use MOM_interface_filter,      only : interface_filter_CS
 use MOM_lateral_mixing_coeffs, only : calc_slope_functions, VarMix_init, VarMix_end
@@ -543,6 +543,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   real :: cycle_time    ! The length of the coupled time-stepping cycle [T ~> s].
   real, dimension(SZI_(CS%G),SZJ_(CS%G)) :: &
     ssh         ! sea surface height, which may be based on eta_av [Z ~> m]
+  real, dimension(SZI_(CS%G),SZJ_(CS%G),SZK_(CS%GV)) :: &
+    dz          ! Vertical distance across layers [Z ~> m]
 
   real, dimension(:,:,:), pointer :: &
     u => NULL(), & ! u : zonal velocity component [L T-1 ~> m s-1]
@@ -716,12 +718,14 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     if (CS%UseWaves) then
       ! Update wave information, which is presently kept static over each call to step_mom
       call enable_averages(time_interval, Time_start + real_to_time(US%T_to_s*time_interval), CS%diag)
-      call Update_Stokes_Drift(G, GV, US, Waves, h, forces%ustar, time_interval, do_dyn)
+      call thickness_to_dz(h, CS%tv, dz, G, GV, US, halo_size=1)
+      call Update_Stokes_Drift(G, GV, US, Waves, dz, forces%ustar, time_interval, do_dyn)
       call disable_averaging(CS%diag)
     endif
   else ! not do_dyn.
     if (CS%UseWaves) then ! Diagnostics are not enabled in this call.
-      call Update_Stokes_Drift(G, GV, US, Waves, h, fluxes%ustar, time_interval, do_dyn)
+      call thickness_to_dz(h, CS%tv, dz, G, GV, US, halo_size=1)
+      call Update_Stokes_Drift(G, GV, US, Waves, dz, fluxes%ustar, time_interval, do_dyn)
     endif
   endif
 
