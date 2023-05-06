@@ -697,13 +697,13 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
                             fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
                           Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
     else
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
                             fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
                           Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
     endif
 
@@ -1301,13 +1301,13 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
                            fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
                        Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
     else
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
                            fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
                        Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
     endif
 
@@ -1910,13 +1910,13 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
                            fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
                          Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
     else
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
                            fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
                          Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
     endif
 
