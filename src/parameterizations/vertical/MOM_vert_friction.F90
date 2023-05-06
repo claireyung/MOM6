@@ -1067,7 +1067,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, dt, G, GV, US, CS, OBC, VarM
 
     if (CS%bottomdraglaw) then ; do I=Isq,Ieq
       kv_bbl(I) = visc%Kv_bbl_u(I,j)
-      bbl_thick(I) = GV%H_to_Z*visc%bbl_thick_u(I,j) + dz_neglect
+      bbl_thick(I) = visc%bbl_thick_u(I,j) + dz_neglect
       if (do_i(I)) I_Hbbl(I) = 1.0 / bbl_thick(I)
     enddo ; endif
 
@@ -1194,7 +1194,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, dt, G, GV, US, CS, OBC, VarM
           ! Perhaps this needs to be done more carefully, via find_eta.
           do I=Isq,Ieq ; if (do_i_shelf(I)) then
             zh(I) = 0.0 ; Ztop_min(I) = min(zcol(i), zcol(i+1))
-            I_HTbl(I) = 1.0 / (GV%H_to_Z*visc%tbl_thick_shelf_u(I,j) + dz_neglect)
+            I_HTbl(I) = 1.0 / (visc%tbl_thick_shelf_u(I,j) + dz_neglect)
           endif ; enddo
           do k=1,nz
             do i=Isq,Ieq+1 ; zcol(i) = zcol(i) - dz(i,j,k) ; enddo
@@ -1277,7 +1277,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, dt, G, GV, US, CS, OBC, VarM
 
     if (CS%bottomdraglaw) then ; do i=is,ie
       kv_bbl(i) = visc%Kv_bbl_v(i,J)
-      bbl_thick(i) = GV%H_to_Z*visc%bbl_thick_v(i,J) + dz_neglect
+      bbl_thick(i) = visc%bbl_thick_v(i,J) + dz_neglect
       if (do_i(i)) I_Hbbl(i) = 1.0 / bbl_thick(i)
     enddo ; endif
 
@@ -1407,7 +1407,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, dt, G, GV, US, CS, OBC, VarM
           ! Perhaps this needs to be done more carefully, via find_eta.
           do i=is,ie ; if (do_i_shelf(i)) then
             zh(i) = 0.0 ; Ztop_min(I) = min(zcol1(i), zcol2(i))
-            I_HTbl(i) = 1.0 / (GV%H_to_Z*visc%tbl_thick_shelf_v(i,J) + dz_neglect)
+            I_HTbl(i) = 1.0 / (visc%tbl_thick_shelf_v(i,J) + dz_neglect)
           endif ; enddo
           do k=1,nz
             do i=is,ie ; if (do_i_shelf(i)) then
@@ -1755,10 +1755,10 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
     do i=is,ie ; if (do_i(i)) then
       if (work_on_u) then
         kv_TBL(i) = visc%Kv_tbl_shelf_u(I,j)
-        tbl_thick(i) = GV%H_to_Z*visc%tbl_thick_shelf_u(I,j) + h_neglect
+        tbl_thick(i) = visc%tbl_thick_shelf_u(I,j) + h_neglect
       else
         kv_TBL(i) = visc%Kv_tbl_shelf_v(i,J)
-        tbl_thick(i) = GV%H_to_Z*visc%tbl_thick_shelf_v(i,J) + h_neglect
+        tbl_thick(i) = visc%tbl_thick_shelf_v(i,J) + h_neglect
       endif
       z_t(i) = 0.0
 

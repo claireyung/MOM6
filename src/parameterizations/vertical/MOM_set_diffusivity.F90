@@ -601,7 +601,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
 
     if (allocated(visc%bbl_thick_u) .and. allocated(visc%bbl_thick_v)) then
       call uvchksum("BBL bbl_thick_[uv]", visc%bbl_thick_u, visc%bbl_thick_v, &
-                    G%HI, haloshift=0, symmetric=.true., scale=GV%H_to_m, &
+                    G%HI, haloshift=0, symmetric=.true., scale=US%Z_to_m, &
                     scalar_pair=.true.)
     endif
 
@@ -1691,13 +1691,13 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
 
   real, dimension(SZIB_(G)) :: &
     uhtot, &      ! running integral of u in the BBL [H L T-1 ~> m2 s-1 or kg m-1 s-1]
-    ustar, &      ! bottom boundary layer turbulence speed [Z T-1 ~> m s-1].
+    ustar, &      ! bottom boundary layer piston velocity [H T-1 ~> m s-1 or kg m-2 s-1].
     u2_bbl        ! square of the mean zonal velocity in the BBL [L2 T-2 ~> m2 s-2]
 
   real :: vhtot(SZI_(G)) ! running integral of v in the BBL [H L T-1 ~> m2 s-1 or kg m-1 s-1]
 
   real, dimension(SZI_(G),SZJB_(G)) :: &
-    vstar, & ! ustar at at v-points [Z T-1 ~> m s-1].
+    vstar, & ! ustar at at v-points [H T-1 ~> m s-1 or kg m-2 s-1].
     v2_bbl   ! square of average meridional velocity in BBL [L2 T-2 ~> m2 s-2]
 
   real :: cdrag_sqrt  ! Square root of the drag coefficient [nondim]
@@ -1775,9 +1775,9 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
           hvel = 0.5*(h(i,j,k) + h(i,j+1,k))
         endif
 
-        if ((htot(i) + hvel) >= visc%bbl_thick_v(i,J)) then
-          vhtot(i) = vhtot(i) + (visc%bbl_thick_v(i,J) - htot(i))*v(i,J,k)
-          htot(i) = visc%bbl_thick_v(i,J)
+        if ((htot(i) + hvel) >= GV%Z_to_H*visc%bbl_thick_v(i,J)) then
+          vhtot(i) = vhtot(i) + (GV%Z_to_H*visc%bbl_thick_v(i,J) - htot(i))*v(i,J,k)
+          htot(i) = GV%Z_to_H*visc%bbl_thick_v(i,J)
           do_i(i) = .false.
         else
           vhtot(i) = vhtot(i) + hvel*v(i,J,k)
@@ -1827,9 +1827,9 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
           hvel = 0.5*(h(i,j,k) + h(i+1,j,k))
         endif
 
-        if ((htot(I) + hvel) >= visc%bbl_thick_u(I,j)) then
-          uhtot(I) = uhtot(I) + (visc%bbl_thick_u(I,j) - htot(I))*u(I,j,k)
-          htot(I) = visc%bbl_thick_u(I,j)
+        if ((htot(I) + hvel) >= GV%Z_to_H*visc%bbl_thick_u(I,j)) then
+          uhtot(I) = uhtot(I) + (GV%Z_to_H*visc%bbl_thick_u(I,j) - htot(I))*u(I,j,k)
+          htot(I) = GV%Z_to_H*visc%bbl_thick_u(I,j)
           do_i(I) = .false.
         else
           uhtot(I) = uhtot(I) + hvel*u(I,j,k)
@@ -1846,12 +1846,12 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
     endif ; enddo
 
     do i=is,ie
-      visc%ustar_BBL(i,j) = sqrt(0.5*G%IareaT(i,j) * &
+      visc%ustar_BBL(i,j) = GV%H_to_Z * sqrt(0.5*G%IareaT(i,j) * &
                 ((G%areaCu(I-1,j)*(ustar(I-1)*ustar(I-1)) + &
                   G%areaCu(I,j)*(ustar(I)*ustar(I))) + &
                  (G%areaCv(i,J-1)*(vstar(i,J-1)*vstar(i,J-1)) + &
                   G%areaCv(i,J)*(vstar(i,J)*vstar(i,J))) ) )
-      visc%TKE_BBL(i,j) = GV%Z_to_H*US%L_to_Z**2 * &
+      visc%TKE_BBL(i,j) = US%L_to_Z**2 * &
                  (((G%areaCu(I-1,j)*(ustar(I-1)*u2_bbl(I-1)) + &
                     G%areaCu(I,j) * (ustar(I)*u2_bbl(I))) + &
                    (G%areaCv(i,J-1)*(vstar(i,J-1)*v2_bbl(i,J-1)) + &

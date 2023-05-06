@@ -60,7 +60,7 @@ type, public :: set_visc_CS ; private
                             !! Kv as the minimum near-bottom viscosity.
   real    :: Htbl_shelf     !< A nominal thickness of the surface boundary layer for use
                             !! in calculating the near-surface velocity [H ~> m or kg m-2].
-  real    :: Htbl_shelf_min !< The minimum surface boundary layer thickness [H ~> m or kg m-2].
+  real    :: Htbl_shelf_min !< The minimum surface boundary layer thickness [Z ~> m].
   real    :: KV_BBL_min     !< The minimum viscosity in the bottom boundary layer [H Z T-1 ~> m2 s-1 or Pa s]
   real    :: KV_TBL_min     !< The minimum viscosity in the top boundary layer [H Z T-1 ~> m2 s-1 or Pa s]
   logical :: bottomdraglaw  !< If true, the  bottom stress is calculated with a
@@ -1049,10 +1049,10 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
 
       kv_bbl = max(CS%Kv_BBL_min, kv_bbl)
       if (m==1) then
-        visc%bbl_thick_u(I,j) = bbl_thick
+        visc%bbl_thick_u(I,j) = GV%H_to_Z*bbl_thick
         if (allocated(visc%Kv_bbl_u)) visc%Kv_bbl_u(I,j) = kv_bbl
       else
-        visc%bbl_thick_v(i,J) = bbl_thick
+        visc%bbl_thick_v(i,J) = GV%H_to_Z*bbl_thick
         if (allocated(visc%Kv_bbl_v)) visc%Kv_bbl_v(i,J) = kv_bbl
       endif
     endif ; enddo ! end of i loop
@@ -1084,7 +1084,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
                       haloshift=0, scale=GV%HZ_T_to_m2_s, scalar_pair=.true.)
     if (allocated(visc%bbl_thick_u) .and. allocated(visc%bbl_thick_v)) &
         call uvchksum("bbl_thick_[uv]", visc%bbl_thick_u, visc%bbl_thick_v, &
-                      G%HI, haloshift=0, scale=GV%H_to_m, scalar_pair=.true.)
+                      G%HI, haloshift=0, scale=US%Z_to_m, scalar_pair=.true.)
   endif
 
 end subroutine set_viscous_BBL
@@ -1251,7 +1251,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
                     ! magnitudes [H L T-1 ~> m2 s-1 or kg m-1 s-1].
   real :: hweight   ! The thickness of a layer that is within Hbbl
                     ! of the bottom [H ~> m or kg m-2].
-  real :: tbl_thick ! The thickness of the top boundary layer [H ~> m or kg m-2].
+  real :: tbl_thick ! The thickness of the top boundary layer [Z ~> m].
 
   real :: hlay      ! The layer thickness at velocity points [H ~> m or kg m-2].
   real :: I_2hlay   ! 1 / 2*hlay [H-1 ~> m-1 or m2 kg-1].
@@ -1596,15 +1596,15 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
         endif ! use_EOS
 
        ! visc%tbl_thick_shelf_u(I,j) = max(CS%Htbl_shelf_min, &
-       !    htot(I) / (0.5 + sqrt(0.25 + &
+       !    GV%H_to_Z*htot(I) / (0.5 + sqrt(0.25 + &
        !                 (htot(i)*(G%CoriolisBu(I,J-1)+G%CoriolisBu(I,J)))**2 / &
        !                 (ustar(i)*GV%Z_to_H)**2 )) )
         ustar1 = ustar(i)*GV%Z_to_H
         h2f2 = (htot(i)*(G%CoriolisBu(I,J-1)+G%CoriolisBu(I,J)) + h_neglect*CS%omega)**2
         tbl_thick = max(CS%Htbl_shelf_min, &
-            ( htot(I)*ustar1 ) / ( 0.5*ustar1 + sqrt((0.5*ustar1)**2 + h2f2 ) ) )
+            ( htot(I)*ustar(i) ) / ( 0.5*ustar1 + sqrt((0.5*ustar1)**2 + h2f2 ) ) )
         visc%tbl_thick_shelf_u(I,j) = tbl_thick
-        visc%Kv_tbl_shelf_u(I,j) = max(CS%Kv_TBL_min, cdrag_sqrt*ustar(i)*tbl_thick)
+        visc%Kv_tbl_shelf_u(I,j) = max(CS%Kv_TBL_min, cdrag_sqrt*ustar1*tbl_thick)
       endif ; enddo ! I-loop
     endif ! do_any_shelf
 
@@ -1833,15 +1833,15 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
         endif ! use_EOS
 
        ! visc%tbl_thick_shelf_v(i,J) = max(CS%Htbl_shelf_min, &
-       !    htot(i) / (0.5 + sqrt(0.25 + &
+       !    GV%H_to_Z*htot(i) / (0.5 + sqrt(0.25 + &
        !        (htot(i)*(G%CoriolisBu(I-1,J)+G%CoriolisBu(I,J)))**2 / &
        !        (ustar(i)*GV%Z_to_H)**2 )) )
         ustar1 = ustar(i)*GV%Z_to_H
         h2f2 = (htot(i)*(G%CoriolisBu(I-1,J)+G%CoriolisBu(I,J)) + h_neglect*CS%omega)**2
         tbl_thick = max(CS%Htbl_shelf_min, &
-            ( htot(i)*ustar1 ) / ( 0.5*ustar1 + sqrt((0.5*ustar1)**2 + h2f2 ) ) )
+            ( htot(i)*ustar(i) ) / ( 0.5*ustar1 + sqrt((0.5*ustar1)**2 + h2f2 ) ) )
         visc%tbl_thick_shelf_v(i,J) = tbl_thick
-        visc%Kv_tbl_shelf_v(i,J) = max(CS%Kv_TBL_min, cdrag_sqrt*ustar(i)*tbl_thick)
+        visc%Kv_tbl_shelf_v(i,J) = max(CS%Kv_TBL_min, cdrag_sqrt*ustar1*tbl_thick)
 
       endif ; enddo ! i-loop
     endif ! do_any_shelf
@@ -2197,7 +2197,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                  "The minimum top boundary layer thickness that can be "//&
                  "used with BOTTOMDRAGLAW. This might be "//&
                  "Kv/(cdrag*drag_bg_vel) to give Kv as the minimum "//&
-                 "near-top viscosity.", units="m", default=US%Z_to_m*BBL_thick_min, scale=GV%m_to_H)
+                 "near-top viscosity.", units="m", default=US%Z_to_m*BBL_thick_min, scale=US%m_to_Z)
   call get_param(param_file, mdl, "HTBL_SHELF", CS%Htbl_shelf, &
                  "The thickness over which near-surface velocities are "//&
                  "averaged for the drag law under an ice shelf.  By "//&
@@ -2272,7 +2272,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
     allocate(visc%TKE_bbl(isd:ied,jsd:jed), source=0.0)
 
     CS%id_bbl_thick_u = register_diag_field('ocean_model', 'bbl_thick_u', &
-       diag%axesCu1, Time, 'BBL thickness at u points', 'm', conversion=GV%H_to_m)
+       diag%axesCu1, Time, 'BBL thickness at u points', 'm', conversion=US%Z_to_m)
     CS%id_kv_bbl_u = register_diag_field('ocean_model', 'kv_bbl_u', diag%axesCu1, &
        Time, 'BBL viscosity at u points', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
     CS%id_bbl_u = register_diag_field('ocean_model', 'bbl_u', diag%axesCu1, &
@@ -2281,7 +2281,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
       allocate(CS%bbl_u(IsdB:IedB,jsd:jed), source=0.0)
     endif
     CS%id_bbl_thick_v = register_diag_field('ocean_model', 'bbl_thick_v', &
-       diag%axesCv1, Time, 'BBL thickness at v points', 'm', conversion=GV%H_to_m)
+       diag%axesCv1, Time, 'BBL thickness at v points', 'm', conversion=US%Z_to_m)
     CS%id_kv_bbl_v = register_diag_field('ocean_model', 'kv_bbl_v', diag%axesCv1, &
        Time, 'BBL viscosity at v points', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
     CS%id_bbl_v = register_diag_field('ocean_model', 'bbl_v', diag%axesCv1, &
