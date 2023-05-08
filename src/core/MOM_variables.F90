@@ -234,7 +234,8 @@ type, public :: vertvisc_type
     bbl_thick_v, & !< The bottom boundary layer thickness at the v-points [Z ~> m].
     kv_bbl_u, &    !< The bottom boundary layer viscosity at the u-points [H Z T-1 ~> m2 s-1 or Pa s]
     kv_bbl_v, &    !< The bottom boundary layer viscosity at the v-points [H Z T-1 ~> m2 s-1 or Pa s]
-    ustar_BBL, &   !< The turbulence velocity in the bottom boundary layer at h points [Z T-1 ~> m s-1].
+    ustar_BBL, &   !< The turbulence velocity in the bottom boundary layer at
+                   !! h points [H T-1 ~> m s-1 or kg m-2 s-1].
     TKE_BBL, &     !< A term related to the bottom boundary layer source of turbulent kinetic
                    !! energy, currently in [H Z2 T-3 ~> m3 s-3 or W m-2].
     taux_shelf, &  !< The zonal stresses on the ocean under shelves [R Z L T-2 ~> Pa].

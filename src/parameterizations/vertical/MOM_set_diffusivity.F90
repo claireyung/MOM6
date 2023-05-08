@@ -1220,7 +1220,7 @@ subroutine add_drag_diffusivity(h, u, v, tv, fluxes, visc, j, TKE_to_Kd, &
   ! Any turbulence that makes it into the mixed layers is assumed
   ! to be relatively small and is discarded.
   do i=is,ie
-    ustar_h = GV%Z_to_H*visc%ustar_BBL(i,j)
+    ustar_h = visc%ustar_BBL(i,j)
     if (associated(fluxes%ustar_tidal)) &
       ustar_h = ustar_h + GV%Z_to_H*fluxes%ustar_tidal(i,j)
     absf = 0.25 * ((abs(G%CoriolisBu(I-1,J-1)) + abs(G%CoriolisBu(I,J))) + &
@@ -1396,7 +1396,7 @@ subroutine add_LOTW_BBL_diffusivity(h, u, v, tv, fluxes, visc, j, N2_int, Kd_int
   real :: TKE_consumed     ! TKE used for mixing in this layer [H Z2 T-3 ~> m3 s-3 or W m-2]
   real :: TKE_Kd_wall      ! TKE associated with unlimited law of the wall mixing [H Z2 T-3 ~> m3 s-3 or W m-2]
   real :: cdrag_sqrt       ! square root of the drag coefficient [nondim]
-  real :: ustar            ! value of ustar at a thickness point [Z T-1 ~> m s-1].
+  real :: ustar            ! value of ustar at a thickness point [H T-1 ~> m s-1 or kg m-2 s-1].
   real :: ustar2           ! Rescaled square of ustar [H Z T-2 ~> m2 s-2 or Pa]
   real :: absf             ! average absolute value of Coriolis parameter around a thickness point [T-1 ~> s-1]
   real :: dh, dhm1         ! thickness of layers k and k-1, respectively [H ~> m or kg m-2]
@@ -1431,18 +1431,18 @@ subroutine add_LOTW_BBL_diffusivity(h, u, v, tv, fluxes, visc, j, N2_int, Kd_int
     absf = 0.25 * ((abs(G%CoriolisBu(I-1,J-1)) + abs(G%CoriolisBu(I,J))) + &
                    (abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J-1)))) ! Non-zero on equator!
 
-    ! u* at the bottom [Z T-1 ~> m s-1].
+    ! u* at the bottom [H T-1 ~> m s-1 or kg m-2 s-1].
     ustar = visc%ustar_BBL(i,j)
-    ustar2 = GV%Z_to_H*ustar**2
-    ! In add_drag_diffusivity(), fluxes%ustar_tidal is added in. This might be double counting
-    ! since ustar_BBL should already include all contributions to u*? -AJA
-    !### Examine the question of whether there is double counting of fluxes%ustar_tidal.
-    if (associated(fluxes%ustar_tidal)) ustar = ustar + fluxes%ustar_tidal(i,j)
+    ustar2 = GV%H_to_Z*ustar**2
+    !   In add_drag_diffusivity(), fluxes%ustar_tidal is also added in.  There is no
+    ! double-counting because the logic surrounding the calls to add_drag_diffusivity()
+    ! and add_LOTW_BBL_diffusivity() only calls one of the two routines.
+    if (associated(fluxes%ustar_tidal)) ustar = ustar + GV%Z_to_H*fluxes%ustar_tidal(i,j)
 
     ! The maximum decay scale should be something of order 200 m. We use the smaller of u*/f and
     ! (IMax_decay)^-1 as the decay scale. If ustar = 0, this is land so this value doesn't matter.
     Idecay = CS%IMax_decay
-    if ((ustar > 0.0) .and. (GV%H_to_Z*absf > CS%IMax_decay * ustar)) Idecay = GV%H_to_Z*absf / ustar
+    if ((ustar > 0.0) .and. (absf > CS%IMax_decay * ustar)) Idecay = absf / ustar
 
     ! Energy input at the bottom [H Z2 T-3 ~> m3 s-3 or W m-2].
     ! (Note that visc%TKE_BBL is in [H Z2 T-3 ~> m3 s-3 or W m-2], set in set_BBL_TKE().)
@@ -1456,7 +1456,7 @@ subroutine add_LOTW_BBL_diffusivity(h, u, v, tv, fluxes, visc, j, N2_int, Kd_int
 
     TKE_remaining = TKE_column
     total_thickness = ( sum(h(i,j,:)) + GV%H_subroundoff ) ! Total column thickness [H ~> m or kg m-2].
-    ustar_D = GV%Z_to_H*ustar * total_thickness
+    ustar_D = ustar * total_thickness
     z_bot = 0.
     Kd_lower = 0. ! Diffusivity on bottom boundary.
 
@@ -1846,7 +1846,7 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
     endif ; enddo
 
     do i=is,ie
-      visc%ustar_BBL(i,j) = GV%H_to_Z * sqrt(0.5*G%IareaT(i,j) * &
+      visc%ustar_BBL(i,j) = sqrt(0.5*G%IareaT(i,j) * &
                 ((G%areaCu(I-1,j)*(ustar(I-1)*ustar(I-1)) + &
                   G%areaCu(I,j)*(ustar(I)*ustar(I))) + &
                  (G%areaCv(i,J-1)*(vstar(i,J-1)*vstar(i,J-1)) + &
