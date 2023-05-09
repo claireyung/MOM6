@@ -358,7 +358,7 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
     call diapyc_energy_req_test(h, dt, tv, G, GV, US, CS%diapyc_en_rec_CSp)
 
   call cpu_clock_begin(id_clock_set_diffusivity)
-  call set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS%set_diff_CSp, OBC=OBC)
+  call set_BBL_TKE(u, v, h, tv, fluxes, visc, G, GV, US, CS%set_diff_CSp, OBC=OBC)
   call cpu_clock_end(id_clock_set_diffusivity)
 
   ! Frazil formation keeps the temperature above the freezing point.
