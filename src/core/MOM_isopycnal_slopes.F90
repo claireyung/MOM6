@@ -528,7 +528,7 @@ subroutine vert_fill_TS(h, T_in, S_in, kappa_dt, T_f, S_f, G, GV, halo_here, lar
   kap_dt_x2 = (2.0*kappa_dt)*GV%Z_to_H**2
   h0 = h_neglect
   if (present(larger_h_denom)) then
-    if (larger_h_denom) h0 = 1.0e-16*sqrt(kappa_dt)*GV%Z_to_H
+    if (larger_h_denom) h0 = 1.0e-16*sqrt(0.5*kap_dt_x2)
   endif
 
   if (kap_dt_x2 <= 0.0) then
