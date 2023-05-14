@@ -14,6 +14,7 @@ use MOM_file_parser,      only : get_param, log_param, log_version, param_file_t
 use MOM_forcing_type,     only : forcing
 use MOM_grid,             only : ocean_grid_type
 use MOM_io,               only : slasher, vardesc, MOM_read_data
+use MOM_interface_heights, only : thickness_to_dz
 use MOM_isopycnal_slopes, only : vert_fill_TS
 use MOM_time_manager,     only : time_type, set_time, operator(+), operator(<=)
 use MOM_unit_scaling,     only : unit_scale_type
@@ -189,6 +190,7 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
   ! Local variables
   real, dimension(SZI_(G),SZK_(GV)+1) :: &
     dRho_int      ! The unfiltered density differences across interfaces [R ~> kg m-3].
+  real, dimension(SZI_(G),SZK_(GV)) :: dz ! Layer thicknesses in depth units [Z ~> m]
   real, dimension(SZI_(G)) :: &
     pres, &       ! The pressure at each interface [R L2 T-2 ~> Pa].
     Temp_int, &   ! The temperature at each interface [C ~> degC]
@@ -196,11 +198,11 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
     drho_bot, &   ! The density difference at the bottom of a layer [R ~> kg m-3]
     h_amp, &      ! The amplitude of topographic roughness [Z ~> m].
     hb, &         ! The thickness of the water column below the midpoint of a layer [H ~> m or kg m-2]
-    z_from_bot, & ! The distance of a layer center from the bottom [H ~> m or kg m-2]
+    z_from_bot, & ! The distance of a layer center from the bottom [Z ~> m]
     dRho_dT, &    ! The partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
     dRho_dS       ! The partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1].
 
-  real :: dz_int  ! The thickness associated with an interface [H ~> m or kg m-2]
+  real :: dz_int  ! The vertical extent of water associated with an interface [Z ~> m]
   real :: G_Rho0  ! The gravitational acceleration, sometimes divided by the Boussinesq
                   ! density [H T-2 R-1 ~> m4 s-2 kg-1 or m s-2].
   logical :: do_i(SZI_(G)), do_any
@@ -215,13 +217,17 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
   do i=is,ie
     dRho_int(i,1) = 0.0 ; dRho_int(i,nz+1) = 0.0
   enddo
-!$OMP parallel do default(none) shared(is,ie,js,je,nz,tv,fluxes,G,GV,US,h,T_f,S_f, &
-!$OMP                                  h2,N2_bot,G_Rho0,EOSdom) &
-!$OMP                          private(pres,Temp_Int,Salin_Int,dRho_dT,dRho_dS, &
-!$OMP                                  hb,dRho_bot,z_from_bot,do_i,h_amp,       &
-!$OMP                                  do_any,dz_int) &
-!$OMP                     firstprivate(dRho_int)
+
+  !$OMP parallel do default(none) shared(is,ie,js,je,nz,tv,fluxes,G,GV,US,h,T_f,S_f, &
+  !$OMP                                  h2,N2_bot,G_Rho0,EOSdom) &
+  !$OMP                          private(pres,Temp_Int,Salin_Int,dRho_dT,dRho_dS, &
+  !$OMP                                  dz,hb,dRho_bot,z_from_bot,do_i,h_amp,do_any,dz_int) &
+  !$OMP                     firstprivate(dRho_int)
   do j=js,je
+
+    ! Find the vertical distances across layers.
+    call thickness_to_dz(h, tv, dz, j, G, GV)
+
     if (associated(tv%eqn_of_state)) then
       if (associated(fluxes%p_surf)) then
         do i=is,ie ; pres(i) = fluxes%p_surf(i,j) ; enddo
@@ -250,7 +256,7 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
     ! Find the bottom boundary layer stratification.
     do i=is,ie
       hb(i) = 0.0 ; dRho_bot(i) = 0.0
-      z_from_bot(i) = 0.5*h(i,j,nz)
+      z_from_bot(i) = 0.5*dz(i,nz)
       do_i(i) = (G%mask2dT(i,j) > 0.0)
       h_amp(i) = sqrt(h2(i,j))
     enddo
@@ -258,13 +264,13 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
     do k=nz,2,-1
       do_any = .false.
       do i=is,ie ; if (do_i(i)) then
-        dz_int = 0.5*(h(i,j,k) + h(i,j,k-1))
+        dz_int = 0.5*(dz(i,k) + dz(i,k-1))
         z_from_bot(i) = z_from_bot(i) + dz_int ! middle of the layer above
 
-        hb(i) = hb(i) + dz_int
+        hb(i) = hb(i) + 0.5*(h(i,j,k) + h(i,j,k-1))
         dRho_bot(i) = dRho_bot(i) + dRho_int(i,K)
 
-        if (z_from_bot(i) > GV%Z_to_H*h_amp(i)) then
+        if (z_from_bot(i) > h_amp(i)) then
           if (k>2) then
             ! Always include at least one full layer.
             hb(i) = hb(i) + 0.5*(h(i,j,k-1) + h(i,j,k-2))
