@@ -2421,9 +2421,9 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
         call calculate_density(tv%T(:,j,1), tv%S(:,j,1), p_ref_cv, Rcv_ml(:,j), &
                                tv%eqn_of_state, EOSdom)
       enddo
-      call apply_sponge(h, dt, G, GV, US, ea, eb, CS%sponge_CSp, Rcv_ml)
+      call apply_sponge(h, tv, dt, G, GV, US, ea, eb, CS%sponge_CSp, Rcv_ml)
     else
-      call apply_sponge(h, dt, G, GV, US, ea, eb, CS%sponge_CSp)
+      call apply_sponge(h, tv, dt, G, GV, US, ea, eb, CS%sponge_CSp)
     endif
     call cpu_clock_end(id_clock_sponge)
     if (CS%debug) then
