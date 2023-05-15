@@ -319,8 +319,8 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   real :: dHsfc, dHD ! Local copies of nondimensional parameters [nondim]
   real :: H_nbr ! A minimum thickness based on neighboring thicknesses [H ~> m or kg m-2].
 
-  real :: absf_x_H  ! The absolute value of f times the mixed layer thickness [Z T-1 ~> m s-1].
-  real :: kU_star   ! Ustar times the Von Karman constant [Z T-1 ~> m s-1].
+  real :: absf_x_H  ! The absolute value of f times the mixed layer thickness [H T-1 ~> m s-1 or kg m-2 s-1].
+  real :: kU_star   ! Ustar times the Von Karman constant [H T-1 ~> m s-1 or kg m-2 s-1].
   real :: dt__diag  ! A rescaled copy of dt_diag (if present) or dt [T ~> s].
   logical :: write_diags  ! If true, write out diagnostics with this step.
   logical :: reset_diags  ! If true, zero out the accumulated diagnostics.
@@ -622,14 +622,13 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! as the third piece will then optimally describe mixed layer
       ! restratification.  For nkml>=4 the whole strategy should be revisited.
       do i=is,ie
-        kU_star = CS%vonKar*fluxes%ustar(i,j) ! Maybe could be replaced with u*+w*?
-        if (associated(fluxes%ustar_shelf) .and. &
-            associated(fluxes%frac_shelf_h)) then
+        kU_star = CS%vonKar*GV%Z_to_H*fluxes%ustar(i,j) ! Maybe could be replaced with u*+w*?
+        if (associated(fluxes%ustar_shelf) .and. associated(fluxes%frac_shelf_h)) then
           if (fluxes%frac_shelf_h(i,j) > 0.0) &
             kU_star = (1.0 - fluxes%frac_shelf_h(i,j)) * kU_star + &
-                      fluxes%frac_shelf_h(i,j) * (CS%vonKar*fluxes%ustar_shelf(i,j))
+                      fluxes%frac_shelf_h(i,j) * (CS%vonKar*GV%Z_to_H*fluxes%ustar_shelf(i,j))
         endif
-        absf_x_H = 0.25 * GV%H_to_Z * h(i,0) * &
+        absf_x_H = 0.25 * h(i,0) * &
             ((abs(G%CoriolisBu(I,J)) + abs(G%CoriolisBu(I-1,J-1))) + &
              (abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I-1,J))))
         ! If the mixed layer vertical viscosity specification is changed in
@@ -804,7 +803,7 @@ subroutine convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, &
   real :: Ih    !   The inverse of a thickness [H-1 ~> m-1 or m2 kg-1].
   real :: g_H2_2Rho0  !   Half the gravitational acceleration times
                       ! the conversion from H to Z divided by the mean density,
-                      ! in [L2 Z T-2 H-2 R-1 ~> m4 s-2 kg-1 or m10 s-2 kg-3].
+                      ! in [L2 T-2 H-1 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2].
   integer :: is, ie, nz, i, k, k1, nzc, nkmb
 
   is = G%isc ; ie = G%iec ; nz = GV%ke
@@ -2326,7 +2325,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
   g_2 = 0.5 * GV%g_Earth
   Rho0xG = GV%Rho0 * GV%g_Earth
   Idt_H2 = GV%H_to_Z**2 / dt_diag
-  I2Rho0 = 0.5 / (GV%Rho0)
+  I2Rho0 = 0.5 / GV%Rho0
   Angstrom = GV%Angstrom_H
 
   ! This is hard coding of arbitrary and dimensional numbers.
@@ -3131,8 +3130,8 @@ subroutine mixedlayer_detrain_1(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, d_e
                         "CS%nkbl must be 1 in mixedlayer_detrain_1.")
 
   dt_Time = dt / CS%BL_detrain_time
-  g_H2_2Rho0dt = (GV%g_Earth * GV%H_to_Z) / (2.0 * GV%Rho0 * dt_diag)
   g_H2_2dt = (GV%g_Earth * GV%H_to_Z**2) / (2.0 * dt_diag)
+  g_H2_2Rho0dt = g_H2_2dt * GV%RZ_to_H
 
   ! Move detrained water into the buffer layer.
   do k=1,CS%nkml
