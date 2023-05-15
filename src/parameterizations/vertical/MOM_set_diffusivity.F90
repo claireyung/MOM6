@@ -498,15 +498,18 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
       enddo ; enddo
     endif
 
+    if (CS%ML_radiation .or. CS%use_tidal_mixing .or. associated(dd%Kd_work)) then
+      call thickness_to_dz(h, tv, dz, j, G, GV)
+    endif
+
     ! Add the ML_Rad diffusivity.
     if (CS%ML_radiation) then
-      call thickness_to_dz(h, tv, dz, j, G, GV)
       call add_MLrad_diffusivity(dz, fluxes, j, Kd_int_2d, G, GV, US, CS, TKE_to_Kd, Kd_lay_2d)
     endif
 
     ! Add the Nikurashin and / or tidal bottom-driven mixing
     if (CS%use_tidal_mixing) &
-      call calculate_tidal_mixing(h, j, N2_bot, N2_lay, N2_int, TKE_to_Kd, &
+      call calculate_tidal_mixing(dz, j, N2_bot, N2_lay, N2_int, TKE_to_Kd, &
                                   maxTKE, G, GV, US, CS%tidal_mixing, &
                                   CS%Kd_max, visc%Kv_slow, Kd_lay_2d, Kd_int_2d)
 
@@ -562,7 +565,6 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     endif
 
     if (associated(dd%Kd_work)) then
-      call thickness_to_dz(h, tv, dz, j, G, GV)
       do k=1,nz ; do i=is,ie
         dd%Kd_Work(i,j,k) = GV%H_to_RZ * Kd_lay_2d(i,k) * N2_lay(i,k) * dz(i,k)  ! Watt m-2 = kg s-3
       enddo ; enddo
@@ -1393,7 +1395,6 @@ subroutine add_LOTW_BBL_diffusivity(h, u, v, tv, fluxes, visc, j, N2_int, Kd_int
   real, dimension(SZI_(G),SZK_(GV)), &
                   optional, intent(inout) :: Kd_lay !< Layer net diffusivity [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
 
-  ! Local variables
   ! Local variables
   real :: dz(SZI_(G),SZK_(GV)) ! Height change across layers [Z ~> m]
   real :: TKE_column       ! net TKE input into the column [H Z2 T-3 ~> m3 s-3 or W m-2]
