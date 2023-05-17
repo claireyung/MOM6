@@ -11,10 +11,11 @@ use MOM_debugging,     only : hchksum, uvchksum
 use MOM_diag_mediator, only : post_data, register_diag_field, register_scalar_field
 use MOM_diag_mediator, only : time_type, diag_ctrl, safe_alloc_alloc, query_averaging_enabled
 use MOM_diag_mediator, only : enable_averages, disable_averaging
-use MOM_EOS,           only : calculate_density_derivs, EOS_domain
+use MOM_EOS,           only : calculate_density_derivs, calculate_specific_vol_derivs, EOS_domain
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
 use MOM_grid,          only : ocean_grid_type
+use MOM_interface_heights, only : thickness_to_dz
 use MOM_opacity,       only : sumSWoverBands, optics_type, extract_optics_slice, optics_nbands
 use MOM_spatial_means, only : global_area_integral, global_area_mean
 use MOM_spatial_means, only : global_area_mean_u, global_area_mean_v
@@ -968,18 +969,25 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
   real, dimension(SZI_(G))              :: netEvap    ! net FW flux leaving ocean via evaporation
                                                       ! [H T-1 ~> m s-1 or kg m-2 s-1]
   real, dimension(SZI_(G))              :: netHeat    ! net temp flux [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
+  real, dimension(SZI_(G), SZK_(GV))    :: dz         ! Layer thicknesses in depth units [Z ~> m]
   real, dimension(max(nsw,1), SZI_(G))  :: penSWbnd   ! penetrating SW radiation by band
                                                       ! [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   real, dimension(SZI_(G))              :: pressure   ! pressure at the surface [R L2 T-2 ~> Pa]
   real, dimension(SZI_(G))              :: dRhodT     ! density partial derivative wrt temp [R C-1 ~> kg m-3 degC-1]
   real, dimension(SZI_(G))              :: dRhodS     ! density partial derivative wrt saln [R S-1 ~> kg m-3 ppt-1]
+  real, dimension(SZI_(G))              :: dSpV_dT    ! Partial derivative of specific volume with respect
+                                                      ! to temperature [R-1 C-1 ~> m3 kg-1 degC-1]
+  real, dimension(SZI_(G))              :: dSpV_dS    ! Partial derivative of specific volume with respect
+                                                      ! to salinity [R-1 S-1 ~> m3 kg-1 ppt-1]
   real, dimension(SZI_(G),SZK_(GV)+1)   :: netPen     ! The net penetrating shortwave radiation at each level
                                                       ! [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
 
   logical :: useRiverHeatContent
   logical :: useCalvingHeatContent
-  real    :: GoRho ! The gravitational acceleration divided by mean density times a
-                   ! unit conversion factor [L2 H-1 R-1 T-2 ~> m4 kg-1 s-2 or m7 kg-2 s-2]
+  real    :: GoRho  ! The gravitational acceleration divided by mean density times a
+                    ! unit conversion factor [L2 H-1 R-1 T-2 ~> m4 kg-1 s-2 or m7 kg-2 s-2]
+  real    :: g_conv ! The gravitational acceleration times the conversion factors from non-Boussinesq
+                    ! thickness units to mass per units area [R L2 H-1 T-2 ~> kg m-2 s-2 or m s-2]
   real    :: H_limit_fluxes ! A depth scale that specifies when the ocean is shallow that
                             ! it is necessary to eliminate fluxes [H ~> m or kg m-2]
   integer :: i, k
@@ -989,9 +997,6 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
   useCalvingHeatContent = .False.
 
   H_limit_fluxes = max( GV%Angstrom_H, 1.e-30*GV%m_to_H )
-  pressure(:) = 0.
-  if (associated(tv%p_surf)) then ; do i=G%isc,G%iec ; pressure(i) = tv%p_surf(i,j) ; enddo ; endif
-  GoRho       = (GV%g_Earth * GV%H_to_Z) / GV%Rho0
 
   ! The surface forcing is contained in the fluxes type.
   ! We aggregate the thermodynamic forcing for a time step into the following:
@@ -1007,12 +1012,9 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
 
   ! Sum over bands and attenuate as a function of depth
   ! netPen is the netSW as a function of depth
-  call sumSWoverBands(G, GV, US, h(:,j,:), optics_nbands(optics), optics, j, 1.0, &
+  call thickness_to_dz(h, tv, dz, j, G, GV)
+  call sumSWoverBands(G, GV, US, h(:,j,:), dz, optics_nbands(optics), optics, j, 1.0, &
                       H_limit_fluxes, .true., penSWbnd, netPen)
-
-  ! Density derivatives
-  call calculate_density_derivs(Temp(:,j,1), Salt(:,j,1), pressure, dRhodT, dRhodS, &
-                                tv%eqn_of_state, EOS_domain(G%HI))
 
   ! Adjust netSalt to reflect dilution effect of FW flux
   ! [S H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
@@ -1024,13 +1026,41 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
   !netHeat(:) = netHeatMinusSW(:) + sum( penSWbnd, dim=1 )
   netHeat(G%isc:G%iec) = netHeatMinusSW(G%isc:G%iec) + netPen(G%isc:G%iec,1)
 
-  ! Convert to a buoyancy flux, excluding penetrating SW heating
-  buoyancyFlux(G%isc:G%iec,1) = - GoRho * ( dRhodS(G%isc:G%iec) * netSalt(G%isc:G%iec) + &
-                                             dRhodT(G%isc:G%iec) * netHeat(G%isc:G%iec) ) ! [L2 T-3 ~> m2 s-3]
-  ! We also have a penetrative buoyancy flux associated with penetrative SW
-  do k=2, GV%ke+1
-    buoyancyFlux(G%isc:G%iec,k) = - GoRho * ( dRhodT(G%isc:G%iec) * netPen(G%isc:G%iec,k) ) ! [L2 T-3 ~> m2 s-3]
-  enddo
+  ! Determine the buoyancy flux
+  pressure(:) = 0.
+  if (associated(tv%p_surf)) then ; do i=G%isc,G%iec ; pressure(i) = tv%p_surf(i,j) ; enddo ; endif
+
+  if ((.not.GV%Boussinesq) .and. (.not.GV%semi_Boussinesq)) then
+    g_conv = GV%g_Earth * GV%H_to_RZ
+
+    ! Specific volume derivatives
+    call calculate_specific_vol_derivs(Temp(:,j,1), Salt(:,j,1), pressure, dSpV_dT, dSpV_dS, &
+                                  tv%eqn_of_state, EOS_domain(G%HI))
+
+    ! Convert to a buoyancy flux [L2 T-3 ~> m2 s-3], first excluding penetrating SW heating
+    do i=G%isc,G%iec
+      buoyancyFlux(i,1) = g_conv * (dSpV_dS(i) * netSalt(i) + dSpV_dT(i) * netHeat(i))
+    enddo
+    ! We also have a penetrative buoyancy flux associated with penetrative SW
+    do k=2,GV%ke+1 ; do i=G%isc,G%iec
+      buoyancyFlux(i,k) = g_conv * ( dSpV_dT(i) * netPen(i,k) ) ! [L2 T-3 ~> m2 s-3]
+    enddo ; enddo
+  else
+    GoRho = (GV%g_Earth * GV%H_to_Z) / GV%Rho0
+
+    ! Density derivatives
+    call calculate_density_derivs(Temp(:,j,1), Salt(:,j,1), pressure, dRhodT, dRhodS, &
+                                  tv%eqn_of_state, EOS_domain(G%HI))
+
+    ! Convert to a buoyancy flux [L2 T-3 ~> m2 s-3], excluding penetrating SW heating
+    do i=G%isc,G%iec
+      buoyancyFlux(i,1) = - GoRho * ( dRhodS(i) * netSalt(i) + dRhodT(i) * netHeat(i) )
+    enddo
+    ! We also have a penetrative buoyancy flux associated with penetrative SW
+    do k=2,GV%ke+1 ; do i=G%isc,G%iec
+      buoyancyFlux(i,k) = - GoRho * ( dRhodT(i) * netPen(i,k) ) ! [L2 T-3 ~> m2 s-3]
+    enddo ; enddo
+  endif
 
 end subroutine calculateBuoyancyFlux1d
 

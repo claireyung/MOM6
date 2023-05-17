@@ -1115,12 +1115,15 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
     SurfPressure, &  ! Surface pressure (approximated as 0.0) [R L2 T-2 ~> Pa]
     dRhodT,       &  ! change in density per change in temperature [R C-1 ~> kg m-3 degC-1]
     dRhodS,       &  ! change in density per change in salinity [R S-1 ~> kg m-3 ppt-1]
+    dSpV_dT,      &  ! Partial derivative of specific volume with temperature [R-1 C-1 ~> m3 kg-1 degC-1]
+    dSpV_dS,      &  ! Partial derivative of specific volume with to salinity [R-1 S-1 ~> m3 kg-1 ppt-1]
     netheat_rate, &  ! netheat but for dt=1 [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
     netsalt_rate, &  ! netsalt but for dt=1 (e.g. returns a rate)
                      ! [S H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
     netMassInOut_rate! netmassinout but for dt=1 [H T-1 ~> m s-1 or kg m-2 s-1]
   real, dimension(SZI_(G), SZK_(GV)) :: &
     h2d, &           ! A 2-d copy of the thicknesses [H ~> m or kg m-2]
+    ! dz, &            ! Layer thicknesses in depth units [Z ~> m]
     T2d, &           ! A 2-d copy of the layer temperatures [C ~> degC]
     pen_TKE_2d, &    ! The TKE required to homogenize the heating by shortwave radiation within
                      ! a layer [R Z3 T-2 ~> J m-2]
@@ -1143,6 +1146,8 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
                       ! in units of [Z3 R2 T-2 H-2 ~> kg2 m-5 s-2 or m s-2].
   real    :: GoRho    ! g_Earth times a unit conversion factor divided by density
                       ! [Z T-2 R-1 ~> m4 s-2 kg-1]
+  real    :: g_conv   ! The gravitational acceleration times the conversion factors from non-Boussinesq
+                      ! thickness units to mass per units area [R Z2 H-1 T-2 ~> kg m-2 s-2 or m s-2]
   logical :: calculate_energetics ! If true, calculate the energy required to mix the newly added
                       ! water over the topmost grid cell, assuming that the fluxes of heat and salt
                       ! and rejected brine are initially applied in vanishingly thin layers at the
@@ -1566,31 +1571,45 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
     !  1) Answers will change due to round-off
     !  2) Be sure to save their values BEFORE fluxes are used.
     if (Calculate_Buoyancy) then
-      drhodt(:) = 0.0
-      drhods(:) = 0.0
       netPen_rate(:) = 0.0
       ! Sum over bands and attenuate as a function of depth.
       ! netPen_rate is the netSW as a function of depth, but only the surface value is used here,
       ! in which case the values of dt, h, optics and H_limit_fluxes are irrelevant.  Consider
       ! writing a shorter and simpler variant to handle this very limited case.
-      ! call sumSWoverBands(G, GV, US, h2d(:,:), optics_nbands(optics), optics, j, dt, &
+      ! Find the vertical distances across layers.
+      ! call thickness_to_dz(h, tv, dz, j, G, GV)
+      ! call sumSWoverBands(G, GV, US, h2d, dz, optics_nbands(optics), optics, j, dt, &
       !                     H_limit_fluxes, .true., pen_SW_bnd_rate, netPen)
       do i=is,ie ; do nb=1,nsw ; netPen_rate(i) = netPen_rate(i) + pen_SW_bnd_rate(nb,i) ; enddo ; enddo
 
-      ! Density derivatives
-      if (associated(tv%p_surf)) then ; do i=is,ie ; SurfPressure(i) = tv%p_surf(i,j) ; enddo ; endif
-      call calculate_density_derivs(T2d(:,1), tv%S(:,j,1), SurfPressure, dRhodT, dRhodS, &
-                                    tv%eqn_of_state, EOSdom)
       ! 1. Adjust netSalt to reflect dilution effect of FW flux
       ! 2. Add in the SW heating for purposes of calculating the net
       ! surface buoyancy flux affecting the top layer.
       ! 3. Convert to a buoyancy flux, excluding penetrating SW heating
       !    BGR-Jul 5, 2017: The contribution of SW heating here needs investigated for ePBL.
-      do i=is,ie
-        SkinBuoyFlux(i,j) = - GoRho * GV%H_to_Z * &
-            (dRhodS(i) * (netSalt_rate(i) - tv%S(i,j,1)*netMassInOut_rate(i)) + &
-             dRhodT(i) * ( netHeat_rate(i) + netPen_rate(i)) ) ! [Z2 T-3 ~> m2 s-3]
-      enddo
+      if (associated(tv%p_surf)) then ; do i=is,ie ; SurfPressure(i) = tv%p_surf(i,j) ; enddo ; endif
+
+      if ((.not.GV%Boussinesq) .and. (.not.GV%semi_Boussinesq)) then
+        g_conv = GV%g_Earth * GV%H_to_RZ * US%L_to_Z**2
+
+        ! Specific volume derivatives
+        call calculate_specific_vol_derivs(T2d(:,1), tv%S(:,j,1), SurfPressure, dSpV_dT, dSpV_dS, &
+                                  tv%eqn_of_state, EOS_domain(G%HI))
+        do i=is,ie
+          SkinBuoyFlux(i,j) = g_conv * &
+              (dSpV_dS(i) * ( netSalt_rate(i) - tv%S(i,j,1)*netMassInOut_rate(i)) + &
+               dSpV_dT(i) * ( netHeat_rate(i) + netPen_rate(i)) ) ! [Z2 T-3 ~> m2 s-3]
+        enddo
+      else
+        ! Density derivatives
+        call calculate_density_derivs(T2d(:,1), tv%S(:,j,1), SurfPressure, dRhodT, dRhodS, &
+                                      tv%eqn_of_state, EOSdom)
+        do i=is,ie
+          SkinBuoyFlux(i,j) = - GoRho * GV%H_to_Z * &
+              (dRhodS(i) * ( netSalt_rate(i) - tv%S(i,j,1)*netMassInOut_rate(i)) + &
+               dRhodT(i) * ( netHeat_rate(i) + netPen_rate(i)) ) ! [Z2 T-3 ~> m2 s-3]
+        enddo
+      endif
     endif
 
   enddo ! j-loop finish
