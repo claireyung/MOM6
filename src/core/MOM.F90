@@ -205,7 +205,7 @@ type, public :: MOM_control_struct ; private
                     !< free surface height or column mass time averaged over the last
                     !! baroclinic dynamics time step [H ~> m or kg m-2]
   real, dimension(:,:), pointer :: &
-    Hml => NULL()   !< active mixed layer depth [H ~> m or kg m-2]
+    Hml => NULL()   !< active mixed layer depth [Z ~> m]
   real :: time_in_cycle !< The running time of the current time-stepping cycle
                     !! in calls that step the dynamics, and also the length of
                     !! the time integral of ssh_rint [T ~> s].
@@ -3369,7 +3369,7 @@ subroutine set_restart_fields(GV, US, param_file, CS, restart_CSp)
                  do_not_log=.true.)
   if (use_ice_shelf .and. associated(CS%Hml)) then
     call register_restart_field(CS%Hml, "hML", .false., restart_CSp, &
-                                "Mixed layer thickness", thickness_units, conversion=GV%H_to_MKS)
+                                "Mixed layer thickness", "m", conversion=US%Z_to_m)
   endif
 
   ! Register scalar unit conversion factors.
@@ -3509,7 +3509,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
   ! copy Hml into sfc_state, so that caps can access it
   if (associated(CS%Hml)) then
     do j=js,je ; do i=is,ie
-      sfc_state%Hml(i,j) = GV%H_to_Z*CS%Hml(i,j)
+      sfc_state%Hml(i,j) = CS%Hml(i,j)
     enddo ; enddo
   endif
 
@@ -3673,7 +3673,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
       do k=1,nz
         call calculate_TFreeze(CS%tv%S(is:ie,j,k), pres(is:ie), T_freeze(is:ie), CS%tv%eqn_of_state)
         do i=is,ie
-          depth_ml = min(GV%Z_to_H*CS%HFrz, CS%visc%MLD(i,j))
+          depth_ml = GV%Z_to_H*min(CS%HFrz, CS%visc%MLD(i,j))
           if (depth(i) + h(i,j,k) < depth_ml) then
             dh = h(i,j,k)
           elseif (depth(i) < depth_ml) then

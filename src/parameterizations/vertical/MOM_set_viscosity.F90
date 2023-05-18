@@ -2057,8 +2057,7 @@ subroutine set_visc_register_restarts(HI, GV, US, param_file, visc, restart_CS)
 
   if (MLE_use_PBL_MLD) then
     call register_restart_field(visc%MLD, "MLD", .false., restart_CS, &
-                  "Instantaneous active mixing layer depth", &
-                  units=get_thickness_units(GV), conversion=GV%H_to_MKS)
+                  "Instantaneous active mixing layer depth", units="m", conversion=US%Z_to_m)
   endif
 
 end subroutine set_visc_register_restarts

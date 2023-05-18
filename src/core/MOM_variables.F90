@@ -263,7 +263,7 @@ type, public :: vertvisc_type
 
   ! The following elements are pointers so they can be used as targets for pointers in the restart registry.
   real, pointer, dimension(:,:) :: &
-    MLD => NULL()  !< Instantaneous active mixing layer depth [H ~> m or kg m-2].
+    MLD => NULL()  !< Instantaneous active mixing layer depth [Z ~> m].
   real, pointer, dimension(:,:,:) :: Kd_shear => NULL()
                 !< The shear-driven turbulent diapycnal diffusivity at the interfaces between layers
                 !! in tracer columns [H Z T-1 ~> m2 s-1 or kg m-1 s-1]

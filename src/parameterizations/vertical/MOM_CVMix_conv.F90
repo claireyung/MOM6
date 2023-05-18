@@ -142,7 +142,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h  !< Layer thickness [H ~> m or kg m-2].
   type(thermo_var_ptrs),                     intent(in)  :: tv !< Thermodynamics structure.
   type(CVMix_conv_cs),                       intent(in)  :: CS !< CVMix convection control structure
-  real, dimension(SZI_(G),SZJ_(G)),          intent(in)  :: hbl !< Depth of ocean boundary layer [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G)),          intent(in)  :: hbl !< Depth of ocean boundary layer [Z ~> m]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), &
                                              intent(inout) :: Kd !< Diapycnal diffusivity at each interface
                                                                  !! that will be incremented here
@@ -229,7 +229,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
       enddo
 
       ! gets index of the level and interface above hbl
-      kOBL = CVMix_kpp_compute_kOBL_depth(iFaceHeight, cellHeight, hbl(i,j))
+      kOBL = CVMix_kpp_compute_kOBL_depth(iFaceHeight, cellHeight, GV%Z_to_H*hbl(i,j))
 
       kv_col(:) = 0.0 ; kd_col(:) = 0.0
       call CVMix_coeffs_conv(Mdiff_out=kv_col(:), &

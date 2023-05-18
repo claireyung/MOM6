@@ -1946,12 +1946,11 @@ end subroutine Mstar_Langmuir
 
 
 !> Copies the ePBL active mixed layer depth into MLD, in units of [Z ~> m] unless other units are specified.
-subroutine energetic_PBL_get_MLD(CS, MLD, G, GV, US, m_to_MLD_units)
+subroutine energetic_PBL_get_MLD(CS, MLD, G, US, m_to_MLD_units)
   type(energetic_PBL_CS),           intent(in)  :: CS  !< Energetic PBL control structure
   type(ocean_grid_type),            intent(in)  :: G   !< Grid structure
-  type(verticalGrid_type),          intent(in)  :: GV  !< The ocean's vertical grid structure
   type(unit_scale_type),            intent(in)  :: US  !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G)), intent(out) :: MLD !< Depth of ePBL active mixing layer [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G)), intent(out) :: MLD !< Depth of ePBL active mixing layer [Z ~> m]
                                                        !! or other units
   real,                   optional, intent(in)  :: m_to_MLD_units !< A conversion factor from meters
                                                        !! to the desired units for MLD, sometimes [Z m-1 ~> 1]
@@ -1959,7 +1958,7 @@ subroutine energetic_PBL_get_MLD(CS, MLD, G, GV, US, m_to_MLD_units)
   real :: scale  ! A dimensional rescaling factor, often [nondim] or [m Z-1 ~> 1]
   integer :: i, j
 
-  scale = GV%Z_to_H*1.0 ; if (present(m_to_MLD_units)) scale = US%Z_to_m * m_to_MLD_units
+  scale = 1.0 ; if (present(m_to_MLD_units)) scale = US%Z_to_m * m_to_MLD_units
 
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
     MLD(i,j) = scale*CS%ML_Depth(i,j)
