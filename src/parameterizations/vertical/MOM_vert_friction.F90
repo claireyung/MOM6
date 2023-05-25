@@ -1553,6 +1553,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
 
   real, dimension(SZIB_(G)) :: &
     u_star, &   ! ustar at a velocity point [Z T-1 ~> m s-1]
+    tau_mag, &  ! The magnitude of the wind stress at a velocity point including gustiness [H Z T-2 ~> m2 s-2 or Pa]
     absf, &     ! The average of the neighboring absolute values of f [T-1 ~> s-1].
 !      h_ml, &  ! The mixed layer depth [H ~> m or kg m-2].
     z_t, &      ! The distance from the top, sometimes normalized
@@ -1566,7 +1567,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
     nk_in_ml      ! The index of the deepest interface in the mixed layer.
   real :: h_shear ! The distance over which shears occur [Z ~> m].
   real :: dhc     ! The distance between the center of adjacent layers [Z ~> m].
-  real :: visc_ml ! The mixed layer viscosity [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
+  real :: visc_ml ! The mixed layer viscosity [H Z T-1 ~> m2 s-1 or Pa s].
   real :: I_Hmix  ! The inverse of the mixed layer thickness [Z-1 ~> m-1].
   real :: a_ml    ! The layer coupling coefficient across an interface in
                   ! the mixed layer [H T-1 ~> m s-1 or Pa s m-1].
@@ -1892,7 +1893,12 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         !   The viscosity in visc_ml is set to go to 0 at the mixed layer top and bottom
         ! (in a log-layer) and be further limited by rotation to give the natural Ekman length.
         temp1 = (z_t(i)*h_ml(i) - z_t(i)*z_t(i))
-        ustar2_denom = (CS%vonKar * GV%Z_to_H*u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        if (GV%Boussinesq) then
+          ustar2_denom = (CS%vonKar * GV%Z_to_H*u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        else
+          tau_mag(i) = GV%Z_to_H*u_star(I)**2
+          ustar2_denom = (CS%vonKar * tau_mag(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        endif
         visc_ml = temp1 * ustar2_denom
         ! Set the viscous coupling based on the model's vertical resolution.  The omission of
         ! the I_amax factor here is consistent with answer dates above 20190101.
@@ -1912,7 +1918,12 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         z_t(i) = z_t(i) + hvel(i,k-1)
 
         temp1 = (z_t(i)*h_ml(i) - z_t(i)*z_t(i))
-        ustar2_denom = (CS%vonKar * GV%Z_to_H*u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        if (GV%Boussinesq) then
+          ustar2_denom = (CS%vonKar * GV%Z_to_H*u_star(i)**2) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        else
+          tau_mag(i) = GV%Z_to_H*u_star(i)**2
+          ustar2_denom = (CS%vonKar * tau_mag(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        endif
 
         ! As a floor on the viscous coupling, assume that the length scale in the denominator can not
         ! be larger than the distance from the surface, consistent with a logarithmic velocity profile.
@@ -1925,7 +1936,14 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         temp1 = (z_t(i)*h_ml(i) - z_t(i)*z_t(i))
         !   This viscosity is set to go to 0 at the mixed layer top and bottom (in a log-layer)
         ! and be further limited by rotation to give the natural Ekman length.
-        visc_ml = GV%Z_to_H*u_star(i) * CS%vonKar * (temp1*u_star(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        ! The following expressions are mathematically equivalent.
+        if (GV%Boussinesq) then
+          visc_ml = GV%Z_to_H*u_star(i) * CS%vonKar * (temp1*u_star(i)) / &
+                             (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        else
+          tau_mag(i) = GV%Z_to_H*u_star(i)**2
+          visc_ml = CS%vonKar * (temp1*tau_mag(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
+        endif
         a_ml = visc_ml / (0.25*(hvel(i,k)+hvel(i,k-1) + h_neglect) + 0.5*I_amax*visc_ml)
 
         ! Choose the largest estimate of a_cpl, but these could be changed to be additive.
