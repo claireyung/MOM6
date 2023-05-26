@@ -140,8 +140,11 @@ type, public :: vertvisc_CS ; private
   integer :: answer_date    !< The vintage of the order of arithmetic and expressions in the viscous
                             !! calculations.  Values below 20190101 recover the answers from the end
                             !! of 2018, while higher values use expressions that do not use an
-                            !! arbitrary and hard-coded maximum viscous coupling coefficient
-                            !! between layers.
+                            !! arbitrary and hard-coded maximum viscous coupling coefficient between
+                            !! layers.  In non-Boussinesq cases, values below 20230601 recover a
+                            !! form of the viscosity within  the mixed layer that breaks up the
+                            !! magnitude of the wind stress with BULKMIXEDLAYER, DYNAMIC_VISCOUS_ML
+                            !! or FIXED_DEPTH_LOTW_ML, but not LOTW_VISCOUS_ML_FLOOR.
   logical :: debug          !< If true, write verbose checksums for debugging purposes.
   integer :: nkml           !< The number of layers in the mixed layer.
   integer, pointer :: ntrunc !< The number of times the velocity has been
@@ -1937,7 +1940,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         !   This viscosity is set to go to 0 at the mixed layer top and bottom (in a log-layer)
         ! and be further limited by rotation to give the natural Ekman length.
         ! The following expressions are mathematically equivalent.
-        if (GV%Boussinesq) then
+        if (GV%Boussinesq .or. (CS%answer_date < 20230601)) then
           visc_ml = GV%Z_to_H*u_star(i) * CS%vonKar * (temp1*u_star(i)) / &
                              (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
         else
@@ -2235,7 +2238,9 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "The vintage of the order of arithmetic and expressions in the viscous "//&
                  "calculations.  Values below 20190101 recover the answers from the end of 2018, "//&
                  "while higher values use expressions that do not use an arbitrary hard-coded "//&
-                 "maximum viscous coupling coefficient  between layers.  "//&
+                 "maximum viscous coupling coefficient between layers.  Values below 20230601 "//&
+                 "recover a form of the viscosity within the mixed layer that breaks up the "//&
+                 "magnitude of the wind stress in some non-Boussinesq cases.  "//&
                  "If both VERT_FRICTION_2018_ANSWERS and VERT_FRICTION_ANSWER_DATE are "//&
                  "specified, the latter takes precedence.", default=default_answer_date)
 
