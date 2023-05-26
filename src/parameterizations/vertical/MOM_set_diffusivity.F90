@@ -504,7 +504,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
 
     ! Add the ML_Rad diffusivity.
     if (CS%ML_radiation) then
-      call add_MLrad_diffusivity(dz, fluxes, j, Kd_int_2d, G, GV, US, CS, TKE_to_Kd, Kd_lay_2d)
+      call add_MLrad_diffusivity(dz, fluxes, tv, j, Kd_int_2d, G, GV, US, CS, TKE_to_Kd, Kd_lay_2d)
     endif
 
     ! Add the Nikurashin and / or tidal bottom-driven mixing
@@ -1533,12 +1533,14 @@ subroutine add_LOTW_BBL_diffusivity(h, u, v, tv, fluxes, visc, j, N2_int, Kd_int
 end subroutine add_LOTW_BBL_diffusivity
 
 !> This routine adds effects of mixed layer radiation to the layer diffusivities.
-subroutine add_MLrad_diffusivity(dz, fluxes, j, Kd_int, G, GV, US, CS, TKE_to_Kd, Kd_lay)
+subroutine add_MLrad_diffusivity(dz, fluxes, tv, j, Kd_int, G, GV, US, CS, TKE_to_Kd, Kd_lay)
   type(ocean_grid_type),            intent(in)    :: G      !< The ocean's grid structure
   type(verticalGrid_type),          intent(in)    :: GV     !< The ocean's vertical grid structure
   type(unit_scale_type),            intent(in)    :: US     !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZK_(GV)), intent(in)   :: dz     !< Height change across layers [Z ~> m]
   type(forcing),                    intent(in)    :: fluxes !< Surface fluxes structure
+  type(thermo_var_ptrs),            intent(in)    :: tv     !< Structure containing pointers to any available
+                                                            !! thermodynamic fields.
   integer,                          intent(in)    :: j      !< The j-index to work on
   real, dimension(SZI_(G),SZK_(GV)+1), intent(inout) :: Kd_int !< The diapycnal diffusivity at interfaces
                                                             !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
@@ -1562,9 +1564,12 @@ subroutine add_MLrad_diffusivity(dz, fluxes, j, Kd_int, G, GV, US, CS, TKE_to_Kd
 
   real :: f_sq              ! The square of the local Coriolis parameter or a related variable [T-2 ~> s-2].
   real :: h_ml_sq           ! The square of the mixed layer thickness [Z2 ~> m2]
+  real :: u_star_H          ! ustar converted to thickness based units [H T-1 ~> m s-1 or kg m-2 s-1]
   real :: ustar_sq          ! ustar squared [Z2 T-2 ~> m2 s-2]
   real :: Kd_mlr            ! A diffusivity associated with mixed layer turbulence radiation
                             ! [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
+  real :: I_rho             ! The inverse of the reference density times a ratio of scaling
+                            ! factors [Z L-1 R-1 ~> m3 kg-1]
   real :: C1_6              ! 1/6 [nondim]
   real :: Omega2            ! rotation rate squared [T-2 ~> s-2].
   real :: z1                ! layer thickness times I_decay [nondim]
@@ -1580,6 +1585,7 @@ subroutine add_MLrad_diffusivity(dz, fluxes, j, Kd_int, G, GV, US, CS, TKE_to_Kd
   C1_6      = 1.0 / 6.0
   kml       = GV%nkml
   dz_neglect = GV%dz_subroundoff
+  I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
 
   if (.not.CS%ML_radiation) return
 
@@ -1596,9 +1602,19 @@ subroutine add_MLrad_diffusivity(dz, fluxes, j, Kd_int, G, GV, US, CS, TKE_to_Kd
         f_sq = CS%ML_omega_frac * 4.0 * Omega2 + (1.0 - CS%ML_omega_frac) * f_sq
     endif
 
-    ustar_sq = max(fluxes%ustar(i,j), CS%ustar_min)**2
-
-    TKE_ml_flux(i) = (CS%mstar * CS%ML_rad_coeff) * (ustar_sq * (GV%Z_to_H*fluxes%ustar(i,j)))
+    ! Determine the energy flux out of the mixed layer and its vertical decay scale.
+    if (GV%Boussinesq) then
+      ustar_sq = max(fluxes%ustar(i,j), CS%ustar_min)**2
+      u_star_H = GV%Z_to_H * fluxes%ustar(i,j)
+    elseif (allocated(tv%SpV_avg)) then
+      ustar_sq = max(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1), CS%ustar_min**2)
+      u_star_H = GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) / tv%SpV_avg(i,j,1))
+    else  ! This semi-Boussinesq form is mathematically equivalent to the Boussinesq version above.
+     ! Differs at roundoff:  ustar_sq = max(fluxes%tau_mag(i,j) * I_rho, CS%ustar_min**2)
+      ustar_sq = max((sqrt(fluxes%tau_mag(i,j) * I_rho))**2, CS%ustar_min**2)
+      u_star_H = GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * GV%Rho0)
+    endif
+    TKE_ml_flux(i) = (CS%mstar * CS%ML_rad_coeff) * (ustar_sq * u_star_H)
     I_decay_len2_TKE = CS%TKE_decay**2 * (f_sq / ustar_sq)
 
     if (CS%ML_rad_TKE_decay) &
