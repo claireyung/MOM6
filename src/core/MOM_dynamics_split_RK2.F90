@@ -570,7 +570,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     call uvchksum("before vertvisc: up", up, vp, G%HI, haloshift=0, symmetric=sym, scale=US%L_T_to_m_s)
   endif
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
-  call vertvisc_coef(up, vp, h, dz, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
+  call vertvisc_coef(up, vp, h, dz, forces, visc, tv, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
   call vertvisc_remnant(visc, CS%visc_rem_u, CS%visc_rem_v, dt, G, GV, US, CS%vertvisc_CSp)
   call cpu_clock_end(id_clock_vertvisc)
   if (showCallTree) call callTree_wayPoint("done with vertvisc_coef (step_MOM_dyn_split_RK2)")
@@ -663,7 +663,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     call uvchksum("0 before vertvisc: [uv]p", up, vp, G%HI,haloshift=0, symmetric=sym, scale=US%L_T_to_m_s)
   endif
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
-  call vertvisc_coef(up, vp, h, dz, forces, visc, dt_pred, G, GV, US, CS%vertvisc_CSp, &
+  call vertvisc_coef(up, vp, h, dz, forces, visc, tv, dt_pred, G, GV, US, CS%vertvisc_CSp, &
                      CS%OBC, VarMix)
   call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
                 GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
@@ -886,7 +886,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   ! u_av <- u_av + dt d/dz visc d/dz u_av
   call cpu_clock_begin(id_clock_vertvisc)
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
-  call vertvisc_coef(u, v, h, dz, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
+  call vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
   call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
                 CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot,waves=waves)
   if (G%nonblocking_updates) then
