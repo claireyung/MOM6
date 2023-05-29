@@ -92,8 +92,8 @@ type, public :: set_visc_CS ; private
                             !! thickness of the viscous mixed layer [nondim]
   real    :: omega          !<   The Earth's rotation rate [T-1 ~> s-1].
   real    :: ustar_min      !< A minimum value of ustar to avoid numerical
-                            !! problems [Z T-1 ~> m s-1].  If the value is small enough,
-                            !! this should not affect the solution.
+                            !! problems [H T-1 ~> m s-1 or kg m-2 s-1].  If the value is
+                            !! small enough, this should not affect the solution.
   real    :: TKE_decay      !< The ratio of the natural Ekman depth to the TKE
                             !! decay scale [nondim]
   real    :: omega_frac     !<   When setting the decay scale for turbulence, use this
@@ -1344,6 +1344,10 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   real :: cdrag_sqrt  ! Square root of the drag coefficient [nondim].
   real :: cdrag_sqrt_H  ! Square root of the drag coefficient, times a unit conversion
                       ! factor from lateral lengths to layer thicknesses [H L-1 ~> nondim or kg m-3].
+  real :: rho0_sc     ! The rescaled Boussinesq reference density (in non-Boussinesq mode) or its
+                      ! rescaled inverse (if Boussinesq) [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
+  real :: tau_scale   ! A rescaling factor used in the coversion of the wind stress magnitude to
+                      ! ustar when in fully non-Boussinese mode [H2 R-2 L-1 Z-1 ~> m6 kg-2 or nondim]
   real :: oldfn       ! The integrated energy required to
                       ! entrain up to the bottom of the layer,
                       ! divided by G_Earth [H R ~> kg m-2 or kg2 m-5].
@@ -1386,6 +1390,9 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   U_bg_sq = CS%drag_bg_vel * CS%drag_bg_vel
   cdrag_sqrt = sqrt(CS%cdrag)
   cdrag_sqrt_H = cdrag_sqrt * US%L_to_Z * GV%Z_to_H
+
+  rho0_sc = GV%Rho0 * US%L_to_Z * GV%RZ_to_H**2 ! This rescaled reference density is not used when fully non-Boussinesq.
+  tau_scale = US%L_to_Z * GV%RZ_to_H**2  ! This rescaling factor is used in fully non-Boussinesq mode.
 
   OBC => CS%OBC
   use_EOS = associated(tv%eqn_of_state)
@@ -1473,7 +1480,15 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
             if (CS%omega_frac > 0.0) &
               absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
           endif
-          U_star = GV%Z_to_H*max(CS%ustar_min, 0.5 * (forces%ustar(i,j) + forces%ustar(i+1,j)))
+          if (GV%Boussinesq) then
+            U_star = max(CS%ustar_min, 0.5*GV%Z_to_H * (forces%ustar(i,j) + forces%ustar(i+1,j)))
+          elseif (allocated(tv%SpV_avg)) then
+            U_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
+                                            sqrt(tau_scale*forces%tau_mag(i+1,j) / tv%SpV_avg(i+1,j,1)) ) )
+          else
+            U_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
+                                            sqrt(forces%tau_mag(i+1,j) * rho0_sc)) )
+          endif
           Idecay_len_TKE(I) = (absf / U_star) * CS%TKE_decay
         endif
       enddo
@@ -1720,14 +1735,22 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
           uhtot(i) = 0.25 * dt_Rho0 * ((forces%taux(I,j) + forces%taux(I-1,j+1)) + &
                                        (forces%taux(I-1,j) + forces%taux(I,j+1)))
 
-         if (CS%omega_frac >= 1.0) then ; absf = 2.0*CS%omega ; else
-           absf = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
-           if (CS%omega_frac > 0.0) &
-             absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
-         endif
+          if (CS%omega_frac >= 1.0) then ; absf = 2.0*CS%omega ; else
+            absf = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
+            if (CS%omega_frac > 0.0) &
+              absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
+          endif
 
-         U_star = GV%Z_to_H*max(CS%ustar_min, 0.5 * (forces%ustar(i,j) + forces%ustar(i,j+1)))
-         Idecay_len_TKE(i) = (absf / U_star) * CS%TKE_decay
+          if (GV%Boussinesq) then
+            U_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
+          elseif (allocated(tv%SpV_avg)) then
+            U_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
+                                            sqrt(tau_scale*forces%tau_mag(i,j+1) / tv%SpV_avg(i,j+1,1)) ) )
+          else
+            U_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
+                                            sqrt(forces%tau_mag(i,j+1) * rho0_sc)) )
+          endif
+          Idecay_len_TKE(i) = (absf / U_star) * CS%TKE_decay
 
         endif
       enddo
@@ -2243,7 +2266,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                  "The rotation rate of the earth.", &
                  units="s-1", default=7.2921e-5, scale=US%T_to_s)
     ! This give a minimum decay scale that is typically much less than Angstrom.
-    CS%ustar_min = 2e-4*CS%omega*(GV%Angstrom_Z + GV%dZ_subroundoff)
+    CS%ustar_min = 2e-4*CS%omega*(GV%Angstrom_H + GV%H_subroundoff)
   else
     call get_param(param_file, mdl, "OMEGA", CS%omega, &
                  "The rotation rate of the earth.", &
