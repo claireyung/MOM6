@@ -333,13 +333,21 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
   real, dimension(SZK_(GV)+1) :: &
     Kd, &           ! The diapycnal diffusivity [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
     mixvel, &       ! A turbulent mixing velocity [Z T-1 ~> m s-1].
-    mixlen          ! A turbulent mixing length [Z ~> m].
+    mixlen, &       ! A turbulent mixing length [Z ~> m].
+    SpV_dt          ! Specific volume interpolated to interfaces divided by dt or 1.0 / (dt * Rho0)
+                    ! times conversion factors in [m3 Z-3 R-1 T2 s-3 ~> m3 kg-1 s-1],
+                    ! used to convert local TKE into a turbulence velocity cubed.
   real :: h_neglect ! A thickness that is so small it is usually lost
                     ! in roundoff and can be neglected [H ~> m or kg m-2].
 
   real :: absf      ! The absolute value of f [T-1 ~> s-1].
   real :: U_star    ! The surface friction velocity [Z T-1 ~> m s-1].
   real :: U_Star_Mean ! The surface friction without gustiness [Z T-1 ~> m s-1].
+  real :: mech_TKE  ! The mechanically generated turbulent kinetic energy available for mixing over a
+                    ! timestep before the application of the efficiency in mstar [R Z3 T-2 ~> J m-2]
+  real :: I_rho     ! The inverse of the Boussinesq reference density times a ratio of scaling
+                    ! factors [Z L-1 R-1 ~> m3 kg-1]
+  real :: I_dt      ! The Adcroft reciprocal of the timestep [T-1 ~> s-1]
   real :: B_Flux    ! The surface buoyancy flux [Z2 T-3 ~> m2 s-3]
   real :: MLD_io    ! The mixed layer depth found by ePBL_column [Z ~> m]
 
@@ -354,18 +362,22 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
   if (.not. associated(tv%eqn_of_state)) call MOM_error(FATAL, &
       "energetic_PBL: Temperature, salinity and an equation of state "//&
       "must now be used.")
-  if (.NOT. associated(fluxes%ustar)) call MOM_error(FATAL, &
-      "energetic_PBL: No surface TKE fluxes (ustar) defined in fluxes type!")
+  if (GV%Boussinesq .and. (.not.associated(fluxes%ustar))) call MOM_error(FATAL, &
+      "energetic_PBL: No surface friction velocity (ustar) defined in fluxes type in Boussinesq mode.")
+  if ((.not.GV%Boussinesq) .and.  (.not.associated(fluxes%tau_mag))) call MOM_error(FATAL, &
+      "energetic_PBL: No surface wind stress magnitude defined in fluxes type in non-Boussinesq mode.")
   if (CS%use_LT .and. .not.associated(Waves)) call MOM_error(FATAL, &
       "energetic_PBL: The Waves control structure must be associated if CS%use_LT "//&
       "(i.e., USE_LA_LI2016 or EPBL_LT) is True.")
 
 
   h_neglect = GV%H_subroundoff
+  I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+  I_dt = 0.0 ; if (dt > 0.0) I_dt = 1.0 / dt
 
   ! Zero out diagnostics before accumulation.
   if (CS%TKE_diagnostics) then
-!!OMP parallel do default(none) shared(is,ie,js,je,CS)
+    !!OMP parallel do default(none) shared(is,ie,js,je,CS)
     do j=js,je ; do i=is,ie
       CS%diag_TKE_wind(i,j) = 0.0 ; CS%diag_TKE_MKE(i,j) = 0.0
       CS%diag_TKE_conv(i,j) = 0.0 ; CS%diag_TKE_forcing(i,j) = 0.0
@@ -376,8 +388,8 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
   ! if (CS%id_Mixing_Length>0) CS%Mixing_Length(:,:,:) = 0.0
   ! if (CS%id_Velocity_Scale>0) CS%Velocity_Scale(:,:,:) = 0.0
 
-!!OMP parallel do default(private) shared(js,je,nz,is,ie,h_3d,dz_3d,u_3d,v_3d,tv,dt, &
-!!OMP                                  CS,G,GV,US,fluxes,TKE_forced,dSV_dT,dSV_dS,Kd_int)
+  !!OMP parallel do default(private) shared(js,je,nz,is,ie,h_3d,dz_3d,u_3d,v_3d,tv,dt,I_dt, &
+  !!OMP                                  CS,G,GV,US,fluxes,TKE_forced,dSV_dT,dSV_dS,Kd_int)
   do j=js,je
     ! Copy the thicknesses and other fields to 2-d arrays.
     do k=1,nz ; do i=is,ie
@@ -387,6 +399,14 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
       dSV_dT_2d(i,k) = dSV_dT(i,j,k) ; dSV_dS_2d(i,k) = dSV_dS(i,j,k)
     enddo ; enddo
     call thickness_to_dz(h_3d, tv, dz_2d, j, G, GV)
+
+    ! Set the inverse density used to translating local TKE into a turbulence velocity
+    SpV_dt(:) = 0.0
+    if ((dt > 0.0) .and. GV%Boussinesq .or. .not.allocated(tv%SpV_avg)) then
+      do K=1,nz+1
+        SpV_dt(K) = (US%Z_to_m**3*US%s_to_T**3) / (dt*GV%Rho0)
+      enddo
+    endif
 
     !   Determine the initial mech_TKE and conv_PErel, including the energy required
     ! to mix surface heating through the topmost cell, the energy released by mixing
@@ -406,7 +426,26 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
       do K=1,nz+1 ; Kd(K) = 0.0 ; enddo
 
       ! Make local copies of surface forcing and process them.
-      u_star = fluxes%ustar(i,j)
+      if (GV%Boussinesq) then
+        u_star = fluxes%ustar(i,j)
+        mech_TKE = dt * GV%Rho0 * u_star**3
+      elseif (allocated(tv%SpV_avg)) then
+        u_star = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+        mech_TKE = dt * u_star * US%L_to_Z*fluxes%tau_mag(i,j)
+      else
+        u_star = sqrt(fluxes%tau_mag(i,j) * I_rho)
+        mech_TKE = dt * GV%Rho0 * u_star**3
+        ! The line above is equivalent to: mech_TKE = dt * u_star * US%L_to_Z*fluxes%tau_mag(i,j)
+      endif
+
+      if (allocated(tv%SpV_avg) .and. .not.GV%Boussinesq) then
+        SpV_dt(1) = (US%Z_to_m**3*US%s_to_T**3) * tv%SpV_avg(i,j,1) * I_dt
+        do K=2,nz
+          SpV_dt(K) = (US%Z_to_m**3*US%s_to_T**3) * 0.5*(tv%SpV_avg(i,j,k-1) + tv%SpV_avg(i,j,k)) * I_dt
+        enddo
+        SpV_dt(nz+1) = (US%Z_to_m**3*US%s_to_T**3) * tv%SpV_avg(i,j,nz) * I_dt
+      endif
+
       u_star_Mean = fluxes%ustar_gustless(i,j)
       B_flux = buoy_flux(i,j)
       if (associated(fluxes%ustar_shelf) .and. associated(fluxes%frac_shelf_h)) then
@@ -429,13 +468,13 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
       if (CS%MLD_iteration_guess .and. (CS%ML_Depth(i,j) > 0.0))  MLD_io = CS%ML_depth(i,j)
 
       if (stoch_CS%pert_epbl) then ! stochastics are active
-        call ePBL_column(h, dz, u, v, T0, S0, dSV_dT_1d, dSV_dS_1d, TKE_forcing, B_flux, absf, &
-                         u_star, u_star_mean, dt, MLD_io, Kd, mixvel, mixlen, GV, &
+        call ePBL_column(h, dz, u, v, T0, S0, dSV_dT_1d, dSV_dS_1d, SpV_dt, TKE_forcing, B_flux, absf, &
+                         u_star, u_star_mean, mech_TKE, dt, MLD_io, Kd, mixvel, mixlen, GV, &
                          US, CS, eCD, Waves, G, i, j, &
                          TKE_gen_stoch=stoch_CS%epbl1_wts(i,j), TKE_diss_stoch=stoch_CS%epbl2_wts(i,j))
       else
-        call ePBL_column(h, dz, u, v, T0, S0, dSV_dT_1d, dSV_dS_1d, TKE_forcing, B_flux, absf, &
-                         u_star, u_star_mean, dt, MLD_io, Kd, mixvel, mixlen, GV, &
+        call ePBL_column(h, dz, u, v, T0, S0, dSV_dT_1d, dSV_dS_1d, SpV_dt, TKE_forcing, B_flux, absf, &
+                         u_star, u_star_mean, mech_TKE, dt, MLD_io, Kd, mixvel, mixlen, GV, &
                          US, CS, eCD, Waves, G, i, j)
       endif
 
@@ -504,8 +543,8 @@ end subroutine energetic_PBL
 
 !> This subroutine determines the diffusivities from the integrated energetics
 !!  mixed layer model for a single column of water.
-subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux, absf, &
-                       u_star, u_star_mean, dt, MLD_io, Kd, mixvel, mixlen, GV, US, CS, eCD, &
+subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, SpV_dt, TKE_forcing, B_flux, absf, &
+                       u_star, u_star_mean, mech_TKE_in, dt, MLD_io, Kd, mixvel, mixlen, GV, US, CS, eCD, &
                        Waves, G, i, j, TKE_gen_stoch, TKE_diss_stoch)
   type(verticalGrid_type), intent(in)    :: GV     !< The ocean's vertical grid structure.
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
@@ -523,6 +562,10 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
                                                    !! [R-1 C-1 ~> m3 kg-1 degC-1].
   real, dimension(SZK_(GV)), intent(in)  :: dSV_dS !< The partial derivative of in-situ specific
                                                    !! volume with salinity [R-1 S-1 ~> m3 kg-1 ppt-1].
+  real, dimension(SZK_(GV)+1), intent(in) :: SpV_dt !< Specific volume interpolated to interfaces
+                                                   !! divided by dt or 1.0 / (dt * Rho0) times conversion
+                                                   !! factors in [m3 Z-3 R-1 T2 s-3 ~> m3 kg-1 s-1],
+                                                   !! used to convert local TKE into a turbulence velocity.
   real, dimension(SZK_(GV)), intent(in)  :: TKE_forcing !< The forcing requirements to homogenize the
                                                    !! forcing that has been applied to each layer
                                                    !! [R Z3 T-2 ~> J m-2].
@@ -531,6 +574,10 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
   real,                    intent(in)    :: u_star !< The surface friction velocity [Z T-1 ~> m s-1].
   real,                    intent(in)    :: u_star_mean !< The surface friction velocity without any
                                                    !! contribution from unresolved gustiness  [Z T-1 ~> m s-1].
+  real,                    intent(in)    :: mech_TKE_in !< The mechanically generated turbulent
+                                                   !! kinetic energy available for mixing over a time
+                                                   !! step before the application of the efficiency
+                                                   !! in mstar. [R Z3 T-2 ~> J m-2].
   real,                    intent(inout) :: MLD_io !< A first guess at the mixed layer depth on input, and
                                                    !! the calculated mixed layer depth on output [Z ~> m]
   real,                    intent(in)    :: dt     !< Time increment [T ~> s].
@@ -654,8 +701,6 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
   real :: dz_tt_min  ! A surface roughness length [Z ~> m].
 
   real :: C1_3      ! = 1/3  [nondim]
-  real :: I_dtrho   ! 1.0 / (dt * Rho0) times conversion factors in [m3 Z-3 R-1 T2 s-3 ~> m3 kg-1 s-1].
-                    ! This is used convert TKE back into ustar^3 for use in a cube root.
   real :: vstar     ! An in-situ turbulent velocity [Z T-1 ~> m s-1].
   real :: mstar_total ! The value of mstar used in ePBL [nondim]
   real :: mstar_LT  ! An addition to mstar due to Langmuir turbulence [nondim] (output for diagnostic)
@@ -710,7 +755,7 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
   logical :: sfc_disconnect ! If true, any turbulence has become disconnected
                     ! from the surface.
 
-! The following are only used for diagnostics.
+  ! The following is only used for diagnostics.
   real :: I_dtdiag  !  = 1.0 / dt [T-1 ~> s-1].
 
   !----------------------------------------------------------------------
@@ -772,7 +817,6 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
   max_itt = 20
 
   dz_tt_min = 0.0
-  I_dtrho = 0.0 ; if (dt*GV%Rho0 > 0.0) I_dtrho = (US%Z_to_m**3*US%s_to_T**3) / (dt*GV%Rho0)
   vstar_unit_scale = US%m_to_Z * US%T_to_s
 
   MLD_guess = MLD_io
@@ -849,18 +893,19 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
       if (CS%Use_LT) then
         call get_Langmuir_Number(LA, G, GV, US, abs(MLD_guess), u_star_mean, i, j, dz, Waves, &
                                  U_H=u, V_H=v)
-        call find_mstar(CS, US, B_flux, u_star, u_star_Mean, MLD_guess, absf, &
+        call find_mstar(CS, US, B_flux, u_star, MLD_guess, absf, &
                         MStar_total, Langmuir_Number=La, Convect_Langmuir_Number=LAmod,&
                         mstar_LT=mstar_LT)
       else
-        call find_mstar(CS, US, B_flux, u_star, u_star_mean, MLD_guess, absf, mstar_total)
+        call find_mstar(CS, US, B_flux, u_star, MLD_guess, absf, mstar_total)
       endif
 
       !/ Apply MStar to get mech_TKE
       if ((CS%answer_date < 20190101) .and. (CS%mstar_scheme==Use_Fixed_MStar)) then
         mech_TKE = (dt*MSTAR_total*GV%Rho0) * u_star**3
       else
-        mech_TKE = MSTAR_total * (dt*GV%Rho0* u_star**3)
+        mech_TKE = MSTAR_total * mech_TKE_in
+        ! mech_TKE = MSTAR_total * (dt*GV%Rho0* u_star**3)
       endif
       ! stochastically perturb mech_TKE in the UFS
       if (present(TKE_gen_stoch)) mech_TKE = mech_TKE*TKE_gen_stoch
@@ -1114,11 +1159,11 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
           TKE_here = mech_TKE + CS%wstar_ustar_coef*conv_PErel
           if (TKE_here > 0.0) then
             if (CS%wT_scheme==wT_from_cRoot_TKE) then
-              vstar = CS%vstar_scale_fac * vstar_unit_scale * (I_dtrho*TKE_here)**C1_3
+              vstar = CS%vstar_scale_fac * vstar_unit_scale * (SpV_dt(K)*TKE_here)**C1_3
             elseif (CS%wT_scheme==wT_from_RH18) then
               Surface_Scale = max(0.05, 1.0 - dztot / MLD_guess)
               vstar = CS%vstar_scale_fac * Surface_Scale * (CS%vstar_surf_fac*u_star + &
-                        vstar_unit_scale * (CS%wstar_ustar_coef*conv_PErel*I_dtrho)**C1_3)
+                        vstar_unit_scale * (CS%wstar_ustar_coef*conv_PErel*SpV_dt(K))**C1_3)
             endif
             hbs_here = min(hb_hs(K), MixLen_shape(K))
             mixlen(K) = MAX(CS%min_mix_len, ((dz_tt*hbs_here)*vstar) / &
@@ -1163,11 +1208,11 @@ subroutine ePBL_column(h, dz, u, v, T0, S0, dSV_dT, dSV_dS, TKE_forcing, B_flux,
               TKE_here = mech_TKE + CS%wstar_ustar_coef*(conv_PErel-PE_chg_max)
               if (TKE_here > 0.0) then
                 if (CS%wT_scheme==wT_from_cRoot_TKE) then
-                  vstar = CS%vstar_scale_fac * vstar_unit_scale * (I_dtrho*TKE_here)**C1_3
+                  vstar = CS%vstar_scale_fac * vstar_unit_scale * (SpV_dt(K)*TKE_here)**C1_3
                 elseif (CS%wT_scheme==wT_from_RH18) then
                   Surface_Scale = max(0.05, 1. - dztot / MLD_guess)
                   vstar = CS%vstar_scale_fac * Surface_Scale * (CS%vstar_surf_fac*u_star + &
-                                  vstar_unit_scale * (CS%wstar_ustar_coef*conv_PErel*I_dtrho)**C1_3)
+                                  vstar_unit_scale * (CS%wstar_ustar_coef*conv_PErel*SpV_dt(K))**C1_3)
                 endif
                 hbs_here = min(hb_hs(K), MixLen_shape(K))
                 mixlen(K) = max(CS%min_mix_len, ((dz_tt*hbs_here)*vstar) / &
@@ -1769,13 +1814,12 @@ subroutine find_PE_chg_orig(Kddt_h, h_k, b_den_1, dTe_term, dSe_term, &
 end subroutine find_PE_chg_orig
 
 !> This subroutine finds the Mstar value for ePBL
-subroutine find_mstar(CS, US, Buoyancy_Flux, UStar, UStar_Mean,&
+subroutine find_mstar(CS, US, Buoyancy_Flux, UStar, &
                       BLD, Abs_Coriolis, MStar, Langmuir_Number,&
                       MStar_LT, Convect_Langmuir_Number)
   type(energetic_PBL_CS), intent(in) :: CS    !< Energetic PBL control structure
   type(unit_scale_type), intent(in)  :: US    !< A dimensional unit scaling type
-  real,                  intent(in)  :: UStar !< ustar w/ gustiness [Z T-1 ~> m s-1]
-  real,                  intent(in)  :: UStar_Mean !< ustar w/o gustiness [Z T-1 ~> m s-1]
+  real,                  intent(in)  :: UStar !< ustar including gustiness [Z T-1 ~> m s-1]
   real,                  intent(in)  :: Abs_Coriolis !< absolute value of the Coriolis parameter [T-1 ~> s-1]
   real,                  intent(in)  :: Buoyancy_Flux !< Buoyancy flux [Z2 T-3 ~> m2 s-3]
   real,                  intent(in)  :: BLD   !< boundary layer depth [Z ~> m]
