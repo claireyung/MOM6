@@ -16,6 +16,7 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : thermo_var_ptrs
 use MOM_verticalGrid,  only : verticalGrid_type
 use MOM_EOS,           only : calculate_density, calculate_density_derivs, EOS_domain
+use MOM_EOS,           only : average_specific_vol
 
 implicit none ; private
 
@@ -274,6 +275,9 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
                 ! salinity [R S-1 ~> kg m-3 ppt-1].
     dRcv_dS, &  !   Partial derivative of the coordinate variable potential
                 ! density in the mixed layer with salinity [R S-1 ~> kg m-3 ppt-1].
+    p_sfc, &    ! The sea surface pressure [R L2 T-2 ~> Pa]
+    dp_ml, &    ! The pressure change across the mixed layer [R L2 T-2 ~> Pa]
+    SpV_ml, &   ! The specific volume averaged across the mixed layer [R-1 ~> m3 kg-1]
     TKE_river   ! The source of turbulent kinetic energy available for mixing
                 ! at rivermouths [H L2 T-3 ~> m3 s-3 or W m-2].
 
@@ -514,7 +518,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     !    First the TKE at the depth of free convection that is available
     !  to drive mixing is calculated.
     call find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, &
-                           TKE, TKE_river, Idecay_len_TKE, cMKE, dt, Idt_diag, &
+                           TKE, TKE_river, Idecay_len_TKE, cMKE, tv, dt, Idt_diag, &
                            j, ksort, G, GV, US, CS)
 
     ! Here the mechanically driven entrainment occurs.
@@ -544,9 +548,26 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     if (write_diags .and. allocated(CS%ML_depth)) then ; do i=is,ie
       CS%ML_depth(i,j) = h(i,0)  ! Store the diagnostic.
     enddo ; endif
-    if (associated(Hml)) then ; do i=is,ie
-      Hml(i,j) = G%mask2dT(i,j) * GV%H_to_Z*h(i,0)
-    enddo ; endif
+
+    if (associated(Hml)) then
+      ! Return the mixed layerd depth in [Z ~> m].
+      if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+        do i=is,ie
+          Hml(i,j) = G%mask2dT(i,j) * GV%H_to_Z*h(i,0)
+        enddo
+      else
+        do i=is,ie ; dp_ml(i) = GV%g_Earth * GV%H_to_RZ * h(i,0) ; enddo
+        if (associated(tv%p_surf)) then
+          do i=is,ie ; p_sfc(i) = tv%p_surf(i,j) ; enddo
+        else
+          do i=is,ie ; p_sfc(i) = 0.0 ; enddo
+        endif
+        call average_specific_vol(T(:,0), S(:,0), p_sfc, dp_ml, SpV_ml, tv%eqn_of_state)
+        do i=is,ie
+          Hml(i,j) = G%mask2dT(i,j) * GV%H_to_RZ * SpV_ml(i) *  h(i,0)
+        enddo
+      endif
+    endif
 
 ! At this point, return water to the original layers, but constrained to
 ! still be sorted.  After this point, all the water that is in massive
@@ -622,11 +643,25 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! as the third piece will then optimally describe mixed layer
       ! restratification.  For nkml>=4 the whole strategy should be revisited.
       do i=is,ie
-        kU_star = CS%vonKar*GV%Z_to_H*fluxes%ustar(i,j) ! Maybe could be replaced with u*+w*?
+        ! Perhaps in the following, u* could be replaced with u*+w*?
+        if (GV%Boussinesq) then
+          kU_star = CS%vonKar * GV%Z_to_H * fluxes%ustar(i,j)
+        elseif (allocated(tv%SpV_avg)) then
+          kU_star = CS%vonKar * GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) / tv%SpV_avg(i,j,1))
+        else  ! This semi-Boussinesq form is mathematically equivalent to the Boussinesq version above.
+          kU_star = CS%vonKar * GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * GV%Rho0)
+        endif
         if (associated(fluxes%ustar_shelf) .and. associated(fluxes%frac_shelf_h)) then
-          if (fluxes%frac_shelf_h(i,j) > 0.0) &
-            kU_star = (1.0 - fluxes%frac_shelf_h(i,j)) * kU_star + &
-                      fluxes%frac_shelf_h(i,j) * (CS%vonKar*GV%Z_to_H*fluxes%ustar_shelf(i,j))
+          if (fluxes%frac_shelf_h(i,j) > 0.0) then
+            if (allocated(tv%SpV_avg)) then
+              kU_star = (1.0 - fluxes%frac_shelf_h(i,j)) * kU_star + &
+                        fluxes%frac_shelf_h(i,j) * ((CS%vonKar*fluxes%ustar_shelf(i,j)) / &
+                                                    (GV%H_to_RZ * tv%SpV_avg(i,j,1)))
+            else
+              kU_star = (1.0 - fluxes%frac_shelf_h(i,j)) * kU_star + &
+                        fluxes%frac_shelf_h(i,j) * (CS%vonKar*GV%Z_to_H*fluxes%ustar_shelf(i,j))
+            endif
+          endif
         endif
         absf_x_H = 0.25 * h(i,0) * &
             ((abs(G%CoriolisBu(I,J)) + abs(G%CoriolisBu(I-1,J-1))) + &
@@ -1252,7 +1287,7 @@ end subroutine mixedlayer_convection
 !>   This subroutine determines the TKE available at the depth of free
 !! convection to drive mechanical entrainment.
 subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, &
-                             TKE, TKE_river, Idecay_len_TKE, cMKE, dt, Idt_diag, &
+                             TKE, TKE_river, Idecay_len_TKE, cMKE, tv, dt, Idt_diag, &
                              j, ksort, G, GV, US, CS)
   type(ocean_grid_type),      intent(in)    :: G       !< The ocean's grid structure.
   type(verticalGrid_type),    intent(in)    :: GV      !< The ocean's vertical grid structure.
@@ -1287,6 +1322,8 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
   real, dimension(2,SZI_(G)), intent(out)   :: cMKE    !< Coefficients of HpE and HpE^2 in
                                                        !! calculating the denominator of MKE_rate,
                                                        !! [H-1 ~> m-1 or m2 kg-1] and [H-2 ~> m-2 or m4 kg-2].
+  type(thermo_var_ptrs),      intent(inout) :: tv      !< A structure containing pointers to any
+                                                       !! available thermodynamic fields.
   real,                       intent(in)    :: dt      !< The time step [T ~> s].
   real,                       intent(in)    :: Idt_diag !< The inverse of the accumulated diagnostic
                                                        !! time interval [T-1 ~> s-1].
@@ -1313,18 +1350,37 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
   real :: exp_kh    ! The nondimensional decay of TKE across a layer [nondim].
   real :: absf      ! The absolute value of f averaged to thickness points [T-1 ~> s-1].
   real :: U_star    ! The friction velocity [Z T-1 ~> m s-1].
-  real :: absf_Ustar  ! The absolute value of f divided by U_star [Z-1 ~> m-1].
+  real :: I_rho     ! The inverse of the reference density times a ratio of scaling
+                    ! factors [Z L-1 R-1 ~> m3 kg-1]
+  real :: absf_Ustar  ! The absolute value of f divided by U_star converted to thickness units [H-1 ~> m-1 or m2 kg-1]
   real :: wind_TKE_src ! The surface wind source of TKE [H L2 T-3 ~> m3 s-3 or W m-2].
   real :: diag_wt   ! The ratio of the current timestep to the diagnostic
                     ! timestep (which may include 2 calls) [nondim].
+  real :: H_to_Z    ! The thickness to depth conversion factor, which in non-Boussinesq mode is
+                    ! based on the layer-averaged specific volume [Z H-1 ~> nondim or m3 kg-1]
   integer :: is, ie, nz, i
 
   is = G%isc ; ie = G%iec ; nz = GV%ke
   diag_wt = dt * Idt_diag
 
+  I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+
   if (CS%omega_frac >= 1.0) absf = 2.0*CS%omega
   do i=is,ie
-    U_star = fluxes%ustar(i,j)
+    if (GV%Boussinesq) then
+      U_star = fluxes%ustar(i,j)
+    elseif (allocated(tv%SpV_avg)) then
+      U_star = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+    else
+      U_star = sqrt(fluxes%tau_mag(i,j) * I_rho)
+    endif
+
+    if (GV%Boussinesq .or. (.not.allocated(tv%SpV_avg))) then
+      H_to_Z = GV%H_to_Z
+    else
+      H_to_Z = GV%H_to_RZ * tv%SpV_avg(i,j,1)
+    endif
+
     if (associated(fluxes%ustar_shelf) .and. associated(fluxes%frac_shelf_h)) then
       if (fluxes%frac_shelf_h(i,j) > 0.0) &
         U_star = (1.0 - fluxes%frac_shelf_h(i,j)) * U_star + &
@@ -1332,14 +1388,15 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
     endif
 
     if (U_star < CS%ustar_min) U_star = CS%ustar_min
+
     if (CS%omega_frac < 1.0) then
       absf = 0.25*((abs(G%CoriolisBu(I,J)) + abs(G%CoriolisBu(I-1,J-1))) + &
                    (abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I-1,J))))
       if (CS%omega_frac > 0.0) &
         absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
     endif
-    absf_Ustar = absf / U_star
-    Idecay_len_TKE(i) = (absf_Ustar * CS%TKE_decay) * GV%H_to_Z
+    absf_Ustar = H_to_Z * absf / U_star
+    Idecay_len_TKE(i) = absf_Ustar * CS%TKE_decay
 
 !    The first number in the denominator could be anywhere up to 16.  The
 !  value of 3 was chosen to minimize the time-step dependence of the amount
@@ -1350,9 +1407,9 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
 !    This equation assumes that small & large scales contribute to mixed layer
 !  deepening at similar rates, even though small scales are dissipated more
 !  rapidly (implying they are less efficient).
-!     Ih = 1.0/(16.0*CS%vonKar*U_star*dt)
-    Ih = GV%H_to_Z/(3.0*CS%vonKar*U_star*dt)
-    cMKE(1,i) = 4.0 * Ih ; cMKE(2,i) = (absf_Ustar*GV%H_to_Z) * Ih
+!     Ih = H_to_Z / (16.0*CS%vonKar*U_star*dt)
+    Ih = H_to_Z / (3.0*CS%vonKar*U_star*dt)
+    cMKE(1,i) = 4.0 * Ih ; cMKE(2,i) = absf_Ustar * Ih
 
     if (Idecay_len_TKE(i) > 0.0) then
       exp_kh = exp(-htot(i)*Idecay_len_TKE(i))
@@ -1370,7 +1427,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
 
       if (totEn_Z > 0.0) then
         nstar_FC = CS%nstar * totEn_Z / (totEn_Z + 0.2 * &
-                        sqrt(0.5 * dt * (GV%H_to_Z**2*(absf*htot(i))**3) * totEn_Z))
+                        sqrt(0.5 * dt * (H_to_Z**2*(absf*htot(i))**3) * totEn_Z))
       else
         nstar_FC = CS%nstar
       endif
@@ -1380,7 +1437,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
       if (Conv_En(i) > 0.0) then
         totEn_Z = US%L_to_Z**2 * (Conv_En(i) + TKE_CA * (htot(i) / h_CA(i)) )
         nstar_FC = CS%nstar * totEn_Z / (totEn_Z + 0.2 * &
-                        sqrt(0.5 * dt * (GV%H_to_Z**2*(absf*htot(i))**3) * totEn_Z))
+                        sqrt(0.5 * dt * (H_to_Z**2*(absf*htot(i))**3) * totEn_Z))
       else
         nstar_FC = CS%nstar
       endif
@@ -1388,7 +1445,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
       totEn_Z = US%L_to_Z**2 * (Conv_En(i) + TKE_CA)
       if (TKE_CA > 0.0) then
         nstar_CA = CS%nstar * totEn_Z / (totEn_Z + 0.2 * &
-                        sqrt(0.5 * dt * (GV%H_to_Z**2*(absf*h_CA(i))**3) * totEn_Z))
+                        sqrt(0.5 * dt * (H_to_Z**2*(absf*h_CA(i))**3) * totEn_Z))
       else
         nstar_CA = CS%nstar
       endif
@@ -1410,15 +1467,25 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
     dKE_conv = dKE_CA(i,1) * MKE_rate_CA + dKE_FC(i) * MKE_rate_FC
 ! At this point, it is assumed that cTKE is positive and stored in TKE_CA!
 ! Note: Removed factor of 2 in u*^3 terms.
-    TKE(i) = (dt*CS%mstar)*((GV%Z_to_H*US%Z_to_L**2*(U_star*U_Star*U_Star))*exp_kh) + &
-             (exp_kh * dKE_conv + nstar_FC*Conv_En(i) + nstar_CA * TKE_CA)
+    if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+      TKE(i) = (dt*CS%mstar)*((GV%Z_to_H*US%Z_to_L**2*(U_star*U_Star*U_Star))*exp_kh) + &
+               (exp_kh * dKE_conv + nstar_FC*Conv_En(i) + nstar_CA * TKE_CA)
+    else
+      ! Note that GV%Z_to_H*US%Z_to_L**2*U_star**3 = GV%RZ_to_H * US%Z_to_L*fluxes%tau_mag(i,j) * U_star
+      TKE(i) = (dt*CS%mstar) * ((GV%RZ_to_H*US%Z_to_L * fluxes%tau_mag(i,j) * U_star)*exp_kh) + &
+               (exp_kh * dKE_conv + nstar_FC*Conv_En(i) + nstar_CA * TKE_CA)
+    endif
 
     if (CS%do_rivermix) then ! Add additional TKE at river mouths
       TKE(i) = TKE(i) + TKE_river(i)*dt*exp_kh
     endif
 
     if (CS%TKE_diagnostics) then
-      wind_TKE_src = CS%mstar*(GV%Z_to_H*US%Z_to_L**2*U_star*U_Star*U_Star) * diag_wt
+      if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+        wind_TKE_src = CS%mstar*(GV%Z_to_H*US%Z_to_L**2*U_star*U_Star*U_Star) * diag_wt
+      else
+        wind_TKE_src = CS%mstar*(GV%RZ_to_H * US%Z_to_L*fluxes%tau_mag(i,j) * U_star) * diag_wt
+      endif
       CS%diag_TKE_wind(i,j) = CS%diag_TKE_wind(i,j) + &
           ( wind_TKE_src + TKE_river(i) * diag_wt )
       CS%diag_TKE_RiBulk(i,j) = CS%diag_TKE_RiBulk(i,j) + dKE_conv*Idt_diag
