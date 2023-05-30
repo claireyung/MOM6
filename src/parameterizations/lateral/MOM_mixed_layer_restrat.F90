@@ -18,7 +18,7 @@ use MOM_restart,       only : register_restart_field, query_initialized, MOM_res
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : thermo_var_ptrs
 use MOM_verticalGrid,  only : verticalGrid_type, get_thickness_units
-use MOM_EOS,           only : calculate_density, EOS_domain
+use MOM_EOS,           only : calculate_density, calculate_spec_vol, EOS_domain
 
 implicit none ; private
 
@@ -150,12 +150,12 @@ subroutine mixedlayer_restrat_general(h, uhtr, vhtr, tv, forces, dt, MLD_in, Var
   real, dimension(SZI_(G),SZJ_(G)) :: &
     MLD_fast, &           ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
     htot_fast, &          ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
-    Rml_av_fast, &        ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3], and
-                          ! then g_Rho0 times the average mixed layer density [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
+    Rml_av_fast, &        ! Negative g_Rho0 times the average mixed layer density or G_Earth
+                          ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
     MLD_slow, &           ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
     htot_slow, &          ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
-    Rml_av_slow           ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3], and
-                          ! then g_Rho0 times the average mixed layer density [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
+    Rml_av_slow           ! Negative g_Rho0 times the average mixed layer density or G_Earth
+                          ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
   real :: g_Rho0          ! G_Earth/Rho0 times a thickness conversion factor
                           ! [L2 H-1 T-2 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2]
   real :: rho0_sc         ! The rescaled Boussinesq reference density (in non-Boussinesq mode) or its
@@ -163,6 +163,11 @@ subroutine mixedlayer_restrat_general(h, uhtr, vhtr, tv, forces, dt, MLD_in, Var
   real :: tau_scale       ! A rescaling factor used in the coversion of the wind stress magnitude to
                           ! ustar when in fully non-Boussinese mode [H2 R-2 L-1 Z-1 ~> m6 kg-2 or nondim]
   real :: rho_ml(SZI_(G)) ! Potential density relative to the surface [R ~> kg m-3]
+  real :: rml_int_fast(SZI_(G)) ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3]
+  real :: rml_int_slow(SZI_(G)) ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3]
+  real :: SpV_ml(SZI_(G)) ! Specific volume evaluated at the surface pressure [R-1 ~> m3 kg-1]
+  real :: SpV_int_fast(SZI_(G)) ! Specific volume integrated through the mixed layer [H R-1 ~> m4 kg-1 or m]
+  real :: SpV_int_slow(SZI_(G)) ! Specific volume integrated through the mixed layer [H R-1 ~> m4 kg-1 or m]
   real :: p0(SZI_(G))     ! A pressure of 0 [R L2 T-2 ~> Pa]
 
   real :: h_vel           ! htot interpolated onto velocity points [H ~> m or kg m-2]
@@ -227,6 +232,9 @@ subroutine mixedlayer_restrat_general(h, uhtr, vhtr, tv, forces, dt, MLD_in, Var
   if (.not. allocated(VarMix%Rd_dx_h) .and. CS%front_length > 0.) &
     call MOM_error(FATAL, "MOM_mixedlayer_restrat: "// &
          "The resolution argument, Rd/dx, was not associated.")
+  if (CS%use_stanley_ml .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
+       "MOM_mixedlayer_restrat: The Stanley parameterization is not"//&
+       "available without the Boussinesq approximation.")
 
   if (CS%MLE_density_diff > 0.) then ! We need to calculate a mixed layer depth, MLD.
     !! TODO: use derivatives and mid-MLD pressure. Currently this is sigma-0. -AJA
@@ -333,51 +341,99 @@ subroutine mixedlayer_restrat_general(h, uhtr, vhtr, tv, forces, dt, MLD_in, Var
   p0(:) = 0.0
   EOSdom(:) = EOS_domain(G%HI, halo=1)
   !$OMP parallel default(shared) private(rho_ml,h_vel,u_star,absf,mom_mixrate,timescale, &
-  !$OMP                                line_is_empty, keep_going,res_scaling_fac,      &
+  !$OMP                                SpV_ml,SpV_int_fast,SpV_int_slow,Rml_int_fast,Rml_int_slow, &
+  !$OMP                                line_is_empty,keep_going,res_scaling_fac, &
   !$OMP                                a,IhTot,b,Ihtot_slow,zpb,hAtVel,zpa,dh)         &
   !$OMP                        firstprivate(uDml,vDml,uDml_slow,vDml_slow)
-  !$OMP do
-  do j=js-1,je+1
-    do i=is-1,ie+1
-      htot_fast(i,j) = 0.0 ; Rml_av_fast(i,j) = 0.0
-      htot_slow(i,j) = 0.0 ; Rml_av_slow(i,j) = 0.0
-    enddo
-    keep_going = .true.
-    do k=1,nz
-      do i=is-1,ie+1
-        h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
-      enddo
-      if (keep_going) then
-        if (CS%use_stanley_ml) then
-          call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, tv%varT(:,j,k), covTS, varS, &
-            rho_ml(:), tv%eqn_of_state, EOSdom)
-        else
-          call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, rho_ml(:), tv%eqn_of_state, EOSdom)
-        endif
-        line_is_empty = .true.
-        do i=is-1,ie+1
-          if (htot_fast(i,j) < MLD_fast(i,j)) then
-            dh = min( h(i,j,k), MLD_fast(i,j)-htot_fast(i,j) )
-            Rml_av_fast(i,j) = Rml_av_fast(i,j) + dh*rho_ml(i)
-            htot_fast(i,j) = htot_fast(i,j) + dh
-            line_is_empty = .false.
-          endif
-          if (htot_slow(i,j) < MLD_slow(i,j)) then
-            dh = min( h(i,j,k), MLD_slow(i,j)-htot_slow(i,j) )
-            Rml_av_slow(i,j) = Rml_av_slow(i,j) + dh*rho_ml(i)
-            htot_slow(i,j) = htot_slow(i,j) + dh
-            line_is_empty = .false.
-          endif
-        enddo
-        if (line_is_empty) keep_going=.false.
-      endif
-    enddo
 
-    do i=is-1,ie+1
-      Rml_av_fast(i,j) = -(g_Rho0*Rml_av_fast(i,j)) / (htot_fast(i,j) + h_neglect)
-      Rml_av_slow(i,j) = -(g_Rho0*Rml_av_slow(i,j)) / (htot_slow(i,j) + h_neglect)
+  if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+    !$OMP do
+    do j=js-1,je+1
+      do i=is-1,ie+1
+        htot_fast(i,j) = 0.0 ; Rml_int_fast(i) = 0.0
+        htot_slow(i,j) = 0.0 ; Rml_int_slow(i) = 0.0
+      enddo
+      keep_going = .true.
+      do k=1,nz
+        do i=is-1,ie+1
+          h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
+        enddo
+        if (keep_going) then
+          if (CS%use_stanley_ml) then
+            call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, tv%varT(:,j,k), covTS, varS, &
+                                   rho_ml(:), tv%eqn_of_state, EOSdom)
+          else
+            call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, rho_ml(:), tv%eqn_of_state, EOSdom)
+          endif
+          line_is_empty = .true.
+          do i=is-1,ie+1
+            if (htot_fast(i,j) < MLD_fast(i,j)) then
+              dh = min( h(i,j,k), MLD_fast(i,j)-htot_fast(i,j) )
+              Rml_int_fast(i) = Rml_int_fast(i) + dh*rho_ml(i)
+              htot_fast(i,j) = htot_fast(i,j) + dh
+              line_is_empty = .false.
+            endif
+            if (htot_slow(i,j) < MLD_slow(i,j)) then
+              dh = min( h(i,j,k), MLD_slow(i,j)-htot_slow(i,j) )
+              Rml_int_slow(i) = Rml_int_slow(i) + dh*rho_ml(i)
+              htot_slow(i,j) = htot_slow(i,j) + dh
+              line_is_empty = .false.
+            endif
+          enddo
+          if (line_is_empty) keep_going=.false.
+        endif
+      enddo
+
+      do i=is-1,ie+1
+        Rml_av_fast(i,j) = -(g_Rho0*Rml_int_fast(i)) / (htot_fast(i,j) + h_neglect)
+        Rml_av_slow(i,j) = -(g_Rho0*Rml_int_slow(i)) / (htot_slow(i,j) + h_neglect)
+      enddo
     enddo
-  enddo
+  else  ! This is only used in non-Boussinesq mode.
+    !$OMP do
+    do j=js-1,je+1
+      do i=is-1,ie+1
+        htot_fast(i,j) = 0.0 ; SpV_int_fast(i) = 0.0
+        htot_slow(i,j) = 0.0 ; SpV_int_slow(i) = 0.0
+      enddo
+      keep_going = .true.
+      do k=1,nz
+        do i=is-1,ie+1
+          h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
+        enddo
+        if (keep_going) then
+          ! if (CS%use_stanley_ml) then  ! This is not implemented yet in the EoS code.
+          !   call calculate_spec_vol(tv%T(:,j,k), tv%S(:,j,k), p0, tv%varT(:,j,k), covTS, varS, &
+          !                          rho_ml(:), tv%eqn_of_state, EOSdom)
+          ! else
+            call calculate_spec_vol(tv%T(:,j,k), tv%S(:,j,k), p0, SpV_ml, tv%eqn_of_state, EOSdom)
+          ! endif
+          line_is_empty = .true.
+          do i=is-1,ie+1
+            if (htot_fast(i,j) < MLD_fast(i,j)) then
+              dh = min( h(i,j,k), MLD_fast(i,j)-htot_fast(i,j) )
+              SpV_int_fast(i) = SpV_int_fast(i) + dh*SpV_ml(i)
+              htot_fast(i,j) = htot_fast(i,j) + dh
+              line_is_empty = .false.
+            endif
+            if (htot_slow(i,j) < MLD_slow(i,j)) then
+              dh = min( h(i,j,k), MLD_slow(i,j)-htot_slow(i,j) )
+              SpV_int_slow(i) = SpV_int_slow(i) + dh*SpV_ml(i)
+              htot_slow(i,j) = htot_slow(i,j) + dh
+              line_is_empty = .false.
+            endif
+          enddo
+          if (line_is_empty) keep_going=.false.
+        endif
+      enddo
+
+      ! Convert the vertically integrated specific volume into a positive variable with units of density.
+      do i=is-1,ie+1
+        Rml_av_fast(i,j) = (GV%H_to_RZ*GV%g_Earth * SpV_int_fast(i)) / (htot_fast(i,j) + h_neglect)
+        Rml_av_slow(i,j) = (GV%H_to_RZ*GV%g_Earth * SpV_int_slow(i)) / (htot_slow(i,j) + h_neglect)
+      enddo
+    enddo
+  endif
 
   if (CS%debug) then
     call hchksum(h, 'mixed_layer_restrat: h', G%HI, haloshift=1, scale=GV%H_to_m)
@@ -670,15 +726,18 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
                           ! sublayer of the mixed layer, divided by dt [H L2 T-1 ~> m3 s-1 or kg s-1].
   real, dimension(SZI_(G),SZJ_(G)) :: &
     htot, &               ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
-    Rml_av                ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3], and
-                          ! then g_Rho0 times the average mixed layer density [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
+    Rml_av                ! g_Rho0 times the average mixed layer density or negative G_Earth
+                          ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
   real :: g_Rho0          ! G_Earth/Rho0 times a thickness conversion factor
                           ! [L2 H-1 T-2 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2]
   real :: rho0_sc         ! The rescaled Boussinesq reference density (in non-Boussinesq mode) or its
                           ! rescaled inverse (if Boussinesq) [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
   real :: tau_scale       ! A rescaling factor used in the coversion of the wind stress magnitude to
                           ! ustar when in fully non-Boussinese mode [H2 R-2 L-1 Z-1 ~> m6 kg-2 or nondim]
-  real :: Rho0(SZI_(G))   ! Potential density relative to the surface [R ~> kg m-3]
+  real :: Rho_ml(SZI_(G)) ! Potential density relative to the surface [R ~> kg m-3]
+  real :: rho_int(SZI_(G)) ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3]
+  real :: SpV_ml(SZI_(G)) ! Specific volume evaluated at the surface pressure [R-1 ~> m3 kg-1]
+  real :: SpV_int(SZI_(G)) ! Specific volume integrated through the surface layer [H R-1 ~> m4 kg-1 or m]
   real :: p0(SZI_(G))     ! A pressure of 0 [R L2 T-2 ~> Pa]
 
   real :: h_vel           ! htot interpolated onto velocity points [H ~> m or kg m-2]
@@ -738,27 +797,50 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
 
   p0(:) = 0.0
   EOSdom(:) = EOS_domain(G%HI, halo=1)
-  !$OMP parallel default(shared) private(Rho0,h_vel,u_star,absf,mom_mixrate,timescale, &
-  !$OMP                               I2htot,z_topx2,hx2,a)                            &
+  !$OMP parallel default(shared) private(Rho_ml,rho_int,h_vel,u_star,absf,mom_mixrate,timescale, &
+  !$OMP                                  SpV_ml,SpV_int,I2htot,z_topx2,hx2,a) &
   !$OMP                       firstprivate(uDml,vDml)
-  !$OMP do
-  do j=js-1,je+1
-    do i=is-1,ie+1
-      htot(i,j) = 0.0 ; Rml_av(i,j) = 0.0
-    enddo
-    do k=1,nkml
-      call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, Rho0(:), tv%eqn_of_state, EOSdom)
+
+  if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+    !$OMP do
+    do j=js-1,je+1
       do i=is-1,ie+1
-        Rml_av(i,j) = Rml_av(i,j) + h(i,j,k)*Rho0(i)
-        htot(i,j) = htot(i,j) + h(i,j,k)
-        h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
+        htot(i,j) = 0.0 ; rho_int(i) = 0.0
+      enddo
+      do k=1,nkml
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, Rho_ml(:), tv%eqn_of_state, EOSdom)
+        do i=is-1,ie+1
+          rho_int(i) = rho_int(i) + h(i,j,k)*Rho_ml(i)
+          htot(i,j) = htot(i,j) + h(i,j,k)
+          h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
+        enddo
+      enddo
+
+      do i=is-1,ie+1
+        Rml_av(i,j) = (g_Rho0*rho_int(i)) / (htot(i,j) + h_neglect)
       enddo
     enddo
+  else  ! This is only used in non-Boussinesq mode.
+    !$OMP do
+    do j=js-1,je+1
+      do i=is-1,ie+1
+        htot(i,j) = 0.0 ; SpV_int(i) = 0.0
+      enddo
+      do k=1,nkml
+        call calculate_spec_vol(tv%T(:,j,k), tv%S(:,j,k), p0, SpV_ml, tv%eqn_of_state, EOSdom)
+        do i=is-1,ie+1
+          SpV_int(i) = SpV_int(i) + h(i,j,k)*SpV_ml(i)  ! [H R-1 ~> m4 kg-1 or m]
+          htot(i,j) = htot(i,j) + h(i,j,k)
+          h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
+        enddo
+      enddo
 
-    do i=is-1,ie+1
-      Rml_av(i,j) = (g_Rho0*Rml_av(i,j)) / (htot(i,j) + h_neglect)
+      ! Convert the vertically integrated specific volume into a negative variable with units of density.
+      do i=is-1,ie+1
+        Rml_av(i,j) = (-GV%H_to_RZ*GV%g_Earth * SpV_int(i)) / (htot(i,j) + h_neglect)
+      enddo
     enddo
-  enddo
+  endif
 
 ! TO DO:
 !   1. Mixing extends below the mixing layer to the mixed layer.  Find it!
