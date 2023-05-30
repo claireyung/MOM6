@@ -11,7 +11,7 @@ use MOM_remapping, only : remapping_CS, initialize_remapping, remapping_core_h
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density_derivs
+use MOM_EOS, only : calculate_density_derivs, calculate_specific_vol_derivs
 
 implicit none ; private
 
@@ -88,6 +88,8 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
   real, dimension(SZK_(GV)+1) :: &
     dRho_dT, &    ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
     dRho_dS, &    ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1]
+    dSpV_dT, &    ! Partial derivative of specific volume with temperature [R-1 C-1 ~> m3 kg-1 degC-1]
+    dSpV_dS, &    ! Partial derivative of specific volume with salinity [R-1 S-1 ~> m3 kg-1 ppt-1]
     pres, &       ! Interface pressure [R L2 T-2 ~> Pa]
     T_int, &      ! Temperature interpolated to interfaces [C ~> degC]
     S_int, &      ! Salinity interpolated to interfaces [S ~> ppt]
@@ -126,8 +128,11 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
     HxR_here       ! A layer integrated density [R H ~> kg m-2 or kg2 m-5]
   real :: speed2_tot ! overestimate of the mode-1 speed squared [L2 T-2 ~> m2 s-2]
   real :: cg1_min2 ! A floor in the squared first mode speed below which 0 is returned [L2 T-2 ~> m2 s-2]
+  real :: cg1_est  ! An initial estimate of the squared first mode speed [L2 T-2 ~> m2 s-2]
   real :: I_Hnew   ! The inverse of a new layer thickness [H-1 ~> m-1 or m2 kg-1]
   real :: drxh_sum ! The sum of density differences across interfaces times thicknesses [R H ~> kg m-2 or kg2 m-5]
+  real :: dSpVxh_sum ! The sum of specific volume differences across interfaces times
+                   ! thicknesses [R-1 H ~> m4 kg-1 or m], negative for stable stratification.
   real :: g_Rho0   ! G_Earth/Rho0 [L2 T-2 H-1 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2].
   real :: c2_scale ! A scaling factor for wave speeds to help control the growth of the determinant and
                    ! its derivative with lam between rows of the Thomas algorithm solver [L2 s2 T-2 m-2 ~> nondim].
@@ -148,6 +153,7 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
                     ! between rows, its units are not easily interpretable, but the ratio of det/ddet
                     ! always has units of [T2 L-2 ~> s2 m-2]
   logical :: use_EOS    ! If true, density is calculated from T & S using an equation of state.
+  logical :: use_nonBous_EOS ! If true, specific volume is calculated from T & S using an equation of state.
   logical :: better_est ! If true, use an improved estimate of the first mode internal wave speed.
   logical :: merge      ! If true, merge the current layer with the one above.
   integer :: kc         ! The number of layers in the column after merging
@@ -189,7 +195,9 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
 
   g_Rho0 = GV%g_Earth*GV%H_to_Z / GV%Rho0
   H_to_pres = GV%H_to_RZ * GV%g_Earth
-  use_EOS = associated(tv%eqn_of_state)
+  ! Note that g_Rho0 = H_to_pres / GV%Rho0**2
+  use_EOS = associated(tv%eqn_of_state) .and. (GV%Boussinesq .or. GV%semi_Boussinesq)
+  use_nonBous_EOS = associated(tv%eqn_of_state) .and. .not.use_EOS
 
   better_est = CS%better_cg1_est
 
@@ -212,18 +220,11 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
   c2_scale = US%m_s_to_L_T**2 / 4096.0**2 ! Other powers of 2 give identical results.
 
   min_h_frac = tol_Hfrac / real(nz)
-!$OMP parallel do default(none) shared(is,ie,js,je,nz,h,G,GV,US,min_h_frac,use_EOS,tv,&
-!$OMP                                  calc_modal_structure,l_use_ebt_mode,modal_structure, &
-!$OMP                                  l_mono_N2_column_fraction,l_mono_N2_depth,CS,   &
-!$OMP                                  H_to_pres,cg1,g_Rho0,rescale,I_rescale, &
-!$OMP                                  better_est,cg1_min2,tol_merge,tol_solve,c2_scale) &
-!$OMP                          private(htot,hmin,kf,H_here,HxT_here,HxS_here,HxR_here, &
-!$OMP                                  Hf,Tf,Sf,Rf,pres,T_int,S_int,drho_dT,drho_dS,   &
-!$OMP                                  drxh_sum,kc,Hc,Hc_H,Tc,Sc,I_Hnew,gprime,&
-!$OMP                                  Rc,speed2_tot,Igl,Igu,lam0,lam,lam_it,dlam, &
-!$OMP                                  mode_struct,sum_hc,N2min,gp,hw,                 &
-!$OMP                                  ms_min,ms_max,ms_sq,H_top,H_bot,I_Htot,merge,   &
-!$OMP                                  det,ddet,det_it,ddet_it)
+  !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,tv,use_EOS,use_nonBous_EOS, &
+  !$OMP                                  CS,min_h_frac,calc_modal_structure,l_use_ebt_mode, &
+  !$OMP                                  modal_structure,l_mono_N2_column_fraction,l_mono_N2_depth, &
+  !$OMP                                  H_to_pres,cg1,g_Rho0,rescale,I_rescale,cg1_min2, &
+  !$OMP                                  better_est,tol_solve,tol_merge,c2_scale)
   do j=js,je
     !   First merge very thin layers with the one above (or below if they are
     ! at the top).  This also transposes the row order so that columns can
@@ -235,7 +236,7 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
       hmin(i) = htot(i)*min_h_frac ; kf(i) = 1 ; H_here(i) = 0.0
       HxT_here(i) = 0.0 ; HxS_here(i) = 0.0 ; HxR_here(i) = 0.0
     enddo
-    if (use_EOS) then
+    if (use_EOS .or. use_nonBous_EOS) then
       do k=1,nz ; do i=is,ie
         if ((H_here(i) > hmin(i)) .and. (h(i,j,k) > hmin(i))) then
           Hf(kf(i),i) = H_here(i)
@@ -258,7 +259,7 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
         Tf(kf(i),i) = HxT_here(i) / H_here(i)
         Sf(kf(i),i) = HxS_here(i) / H_here(i)
       endif ; enddo
-    else
+    else  ! .not. (use_EOS .or. use_nonBous_EOS)
       do k=1,nz ; do i=is,ie
         if ((H_here(i) > hmin(i)) .and. (h(i,j,k) > hmin(i))) then
           Hf(kf(i),i) = H_here(i) ; Rf(kf(i),i) = HxR_here(i) / H_here(i)
@@ -315,7 +316,46 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
                 max(0.0, drho_dT(K)*(Tf(k,i)-Tf(k-1,i)) + drho_dS(K)*(Sf(k,i)-Sf(k-1,i)))
           enddo
         endif
-      else
+        cg1_est = g_Rho0 * drxh_sum
+      elseif (use_nonBous_EOS) then
+        pres(1) = 0.0 ; H_top(1) = 0.0
+        do K=2,kf(i)
+          pres(K) = pres(K-1) + H_to_pres*Hf(k-1,i)
+          T_int(K) = 0.5*(Tf(k,i)+Tf(k-1,i))
+          S_int(K) = 0.5*(Sf(k,i)+Sf(k-1,i))
+          H_top(K) = H_top(K-1) + Hf(k-1,i)
+        enddo
+        call calculate_specific_vol_derivs(T_int, S_int, pres, dSpV_dT, dSpV_dS, &
+                                           tv%eqn_of_state, (/2,kf(i)/) )
+
+        ! Sum the reduced gravities to find out how small a density difference is negligibly small.
+        dSpVxh_sum = 0.0
+        if (better_est) then
+          ! This is an estimate that is correct for the non-EBT mode for 2 or 3 layers, or for
+          ! clusters of massless layers at interfaces that can be grouped into 2 or 3 layers.
+          ! For a uniform stratification and a huge number of layers uniformly distributed in
+          ! density, this estimate is too large (as is desired) by a factor of pi^2/6 ~= 1.64.
+          if (H_top(kf(i)) > 0.0) then
+            I_Htot = 1.0 / (H_top(kf(i)) + Hf(kf(i),i))  ! = 1.0 / (H_top(K) + H_bot(K)) for all K.
+            H_bot(kf(i)+1) = 0.0
+            do K=kf(i),2,-1
+              H_bot(K) = H_bot(K+1) + Hf(k,i)
+              dSpVxh_sum = dSpVxh_sum + ((H_top(K) * H_bot(K)) * I_Htot) * &
+                  min(0.0, dSpV_dT(K)*(Tf(k,i)-Tf(k-1,i)) + dSpV_dS(K)*(Sf(k,i)-Sf(k-1,i)))
+            enddo
+          endif
+        else
+          ! This estimate is problematic in that it goes like 1/nz for a large number of layers,
+          ! but it is an overestimate (as desired) for a small number of layers, by at a factor
+          ! of (H1+H2)**2/(H1*H2) >= 4 for two thick layers.
+          do K=2,kf(i)
+            dSpVxh_sum = dSpVxh_sum + 0.5*(Hf(k-1,i)+Hf(k,i)) * &
+                min(0.0, dSpV_dT(K)*(Tf(k,i)-Tf(k-1,i)) + dSpV_dS(K)*(Sf(k,i)-Sf(k-1,i)))
+          enddo
+        endif
+        ! Note that dSpVxh_sum is negative for stable stratification.
+        cg1_est = H_to_pres * abs(dSpVxh_sum)
+      else  ! .not. (use_EOS .or. use_nonBous_EOS)
         drxh_sum = 0.0
         if (better_est) then
           H_top(1) = 0.0
@@ -333,11 +373,12 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
             drxh_sum = drxh_sum + 0.5*(Hf(k-1,i)+Hf(k,i)) * max(0.0,Rf(k,i)-Rf(k-1,i))
           enddo
         endif
+        cg1_est = g_Rho0 * drxh_sum
       endif
 
       !   Find gprime across each internal interface, taking care of convective instabilities by
       ! merging layers.  If the estimated wave speed is too small, simply return zero.
-      if (g_Rho0 * drxh_sum <= cg1_min2) then
+      if (cg1_est <= cg1_min2) then
         cg1(i,j) = 0.0
         if (present(modal_structure)) modal_structure(i,j,:) = 0.
       else
@@ -392,7 +433,57 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
           do K=2,kc ! Revisit this if non-Boussinesq.
             gprime(K) = g_Rho0 * (drho_dT(K)*(Tc(k)-Tc(k-1)) + drho_dS(K)*(Sc(k)-Sc(k-1)))
           enddo
-        else  ! .not.use_EOS
+        elseif (use_nonBous_EOS) then
+          kc = 1
+          Hc(1) = Hf(1,i) ; Tc(1) = Tf(1,i) ; Sc(1) = Sf(1,i)
+          do k=2,kf(i)
+            ! Note the upward differencing here to account for the signs of the specific volume
+            ! derivatives, along with the absolute value because dSpVxh_sum is negative.
+            if (better_est) then
+              merge = ((dSpV_dT(K)*(Tc(kc)-Tf(k,i)) + dSpV_dS(K)*(Sc(kc)-Sf(k,i))) * &
+                       ((Hc(kc) * Hf(k,i))*I_Htot) < abs(2.0 * tol_merge * dSpVxh_sum))
+            else
+              merge = ((dSpV_dT(K)*(Tc(kc)-Tf(k,i)) + dSpV_dS(K)*(Sc(kc)-Sf(k,i))) * &
+                       (Hc(kc) + Hf(k,i)) < abs(2.0 * tol_merge * dSpVxh_sum))
+            endif
+            if (merge) then
+              ! Merge this layer with the one above and backtrack.
+              I_Hnew = 1.0 / (Hc(kc) + Hf(k,i))
+              Tc(kc) = (Hc(kc)*Tc(kc) + Hf(k,i)*Tf(k,i)) * I_Hnew
+              Sc(kc) = (Hc(kc)*Sc(kc) + Hf(k,i)*Sf(k,i)) * I_Hnew
+              Hc(kc) = (Hc(kc) + Hf(k,i))
+              ! Backtrack to remove any convective instabilities above...  Note
+              ! that the tolerance is a factor of two larger, to avoid limit how
+              ! far back we go.
+              do K2=kc,2,-1
+                if (better_est) then
+                  merge = ( (dSpV_dT(K2)*(Tc(k2-1)-Tc(k2)) + dSpV_dS(K2)*(Sc(k2-1)-Sc(k2))) * &
+                            ((Hc(k2) * Hc(k2-1))*I_Htot) < abs(tol_merge * dSpVxh_sum) )
+                else
+                  merge = ( (dSpV_dT(K2)*(Tc(k2-1)-Tc(k2)) + dSpV_dS(K2)*(Sc(k2-1)-Sc(k2))) * &
+                            (Hc(k2) + Hc(k2-1)) < abs(tol_merge * dSpVxh_sum) )
+                endif
+                if (merge) then
+                  ! Merge the two bottommost layers.  At this point kc = k2.
+                  I_Hnew = 1.0 / (Hc(kc) + Hc(kc-1))
+                  Tc(kc-1) = (Hc(kc)*Tc(kc) + Hc(kc-1)*Tc(kc-1)) * I_Hnew
+                  Sc(kc-1) = (Hc(kc)*Sc(kc) + Hc(kc-1)*Sc(kc-1)) * I_Hnew
+                  Hc(kc-1) = (Hc(kc) + Hc(kc-1))
+                  kc = kc - 1
+                else ; exit ; endif
+              enddo
+            else
+              ! Add a new layer to the column.
+              kc = kc + 1
+              dSpV_dS(Kc) = dSpV_dS(K) ; dSpV_dT(Kc) = dSpV_dT(K)
+              Tc(kc) = Tf(k,i) ; Sc(kc) = Sf(k,i) ; Hc(kc) = Hf(k,i)
+            endif
+          enddo
+          ! At this point there are kc layers and the gprimes should be positive.
+          do K=2,kc
+            gprime(K) = H_to_pres * (dSpV_dT(K)*(Tc(k-1)-Tc(k)) + dSpV_dS(K)*(Sc(k-1)-Sc(k)))
+          enddo
+        else  ! .not. (use_EOS .or. use_nonBous_EOS)
           ! Do the same with density directly...
           kc = 1
           Hc(1) = Hf(1,i) ; Rc(1) = Rf(1,i)
@@ -667,6 +758,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
   real, dimension(SZK_(GV)+1) :: &
     dRho_dT, &    ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
     dRho_dS, &    ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1]
+    dSpV_dT, &    ! Partial derivative of specific volume with temperature [R-1 C-1 ~> m3 kg-1 degC-1]
+    dSpV_dS, &    ! Partial derivative of specific volume with salinity [R-1 S-1 ~> m3 kg-1 ppt-1]
     pres, &       ! Interface pressure [R L2 T-2 ~> Pa]
     T_int, &      ! Temperature interpolated to interfaces [C ~> degC]
     S_int, &      ! Salinity interpolated to interfaces [S ~> ppt]
@@ -726,9 +819,12 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
   real :: speed2_tot ! overestimate of the mode-1 speed squared [L2 T-2 ~> m2 s-2]
   real :: speed2_min ! minimum mode speed (squared) to consider in root searching [L2 T-2 ~> m2 s-2]
   real :: cg1_min2   ! A floor in the squared first mode speed below which 0 is returned [L2 T-2 ~> m2 s-2]
+  real :: cg1_est    ! An initial estimate of the squared first mode speed [L2 T-2 ~> m2 s-2]
   real, parameter :: reduct_factor = 0.5  ! A factor used in setting speed2_min [nondim]
   real :: I_Hnew     ! The inverse of a new layer thickness [H-1 ~> m-1 or m2 kg-1]
   real :: drxh_sum   ! The sum of density differences across interfaces times thicknesses [R H ~> kg m-2 or kg2 m-5]
+  real :: dSpVxh_sum ! The sum of specific volume differences across interfaces times
+                     ! thicknesses [R-1 H ~> m4 kg-1 or m], negative for stable stratification.
   real :: g_Rho0     ! G_Earth/Rho0 [L2 T-2 H-1 R-1 ~> m4 s-2 kg-1 pr m7 s-2 kg-1].
   real :: tol_Hfrac  ! Layers that together are smaller than this fraction of
                      ! the total water column can be merged for efficiency [nondim].
@@ -739,6 +835,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
   integer :: kf(SZI_(G)) ! The number of active layers after filtering.
   integer, parameter :: max_itt = 10
   logical :: use_EOS    ! If true, density is calculated from T & S using the equation of state.
+  logical :: use_nonBous_EOS ! If true, specific volume is calculated from T & S using an equation of state.
   logical :: better_est ! If true, use an improved estimate of the first mode internal wave speed.
   logical :: merge      ! If true, merge the current layer with the one above.
   integer :: nsub       ! number of subintervals used for root finding
@@ -761,7 +858,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
 
   g_Rho0 = GV%g_Earth * GV%H_to_Z / GV%Rho0
   H_to_pres = GV%H_to_RZ * GV%g_Earth
-  use_EOS = associated(tv%eqn_of_state)
+  use_EOS = associated(tv%eqn_of_state) .and. (GV%Boussinesq .or. GV%semi_Boussinesq)
+  use_nonBous_EOS = associated(tv%eqn_of_state) .and. .not.use_EOS
+
   if (CS%c1_thresh < 0.0) &
     call MOM_error(FATAL, "INTERNAL_WAVE_CG1_THRESH must be set to a non-negative "//&
                           "value via wave_speed_init for wave_speeds to be used.")
@@ -781,9 +880,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
   cn(:,:,:) = 0.0
 
   min_h_frac = tol_Hfrac / real(nz)
-  !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,min_h_frac,use_EOS, &
-  !$OMP                                     H_to_pres,tv,cn,g_Rho0,nmodes,cg1_min2,better_est, &
-  !$OMP                                     tol_solve,tol_merge,c2_scale)
+  !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,use_EOS,use_nonBous_EOS, &
+  !$OMP                                     min_h_frac,H_to_pres,tv,cn,g_Rho0,nmodes,cg1_min2, &
+  !$OMP                                     better_est,tol_solve,tol_merge,c2_scale)
   do j=js,je
     !   First merge very thin layers with the one above (or below if they are
     ! at the top).  This also transposes the row order so that columns can
@@ -795,7 +894,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
       hmin(i) = htot(i)*min_h_frac ; kf(i) = 1 ; H_here(i) = 0.0
       HxT_here(i) = 0.0 ; HxS_here(i) = 0.0 ; HxR_here(i) = 0.0
     enddo
-    if (use_EOS) then
+    if (use_EOS .or. use_nonBous_EOS) then
       do k=1,nz ; do i=is,ie
         if ((H_here(i) > hmin(i)) .and. (h(i,j,k) > hmin(i))) then
           Hf(kf(i),i) = H_here(i)
@@ -818,7 +917,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
         Tf(kf(i),i) = HxT_here(i) / H_here(i)
         Sf(kf(i),i) = HxS_here(i) / H_here(i)
       endif ; enddo
-    else
+    else  ! .not. (use_EOS .or. use_nonBous_EOS)
       do k=1,nz ; do i=is,ie
         if ((H_here(i) > hmin(i)) .and. (h(i,j,k) > hmin(i))) then
           Hf(kf(i),i) = H_here(i) ; Rf(kf(i),i) = HxR_here(i) / H_here(i)
@@ -876,6 +975,45 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
                   max(0.0, drho_dT(K)*(Tf(k,i)-Tf(k-1,i)) + drho_dS(K)*(Sf(k,i)-Sf(k-1,i)))
             enddo
           endif
+          cg1_est = g_Rho0 * drxh_sum
+        elseif (use_nonBous_EOS) then
+          pres(1) = 0.0 ; H_top(1) = 0.0
+          do K=2,kf(i)
+            pres(K) = pres(K-1) + H_to_pres*Hf(k-1,i)
+            T_int(K) = 0.5*(Tf(k,i)+Tf(k-1,i))
+            S_int(K) = 0.5*(Sf(k,i)+Sf(k-1,i))
+            H_top(K) = H_top(K-1) + Hf(k-1,i)
+          enddo
+          call calculate_specific_vol_derivs(T_int, S_int, pres, dSpV_dT, dSpV_dS, &
+                                             tv%eqn_of_state, (/2,kf(i)/) )
+
+          ! Sum the reduced gravities to find out how small a density difference is negligibly small.
+          dSpVxh_sum = 0.0
+          if (better_est) then
+            ! This is an estimate that is correct for the non-EBT mode for 2 or 3 layers, or for
+            ! clusters of massless layers at interfaces that can be grouped into 2 or 3 layers.
+            ! For a uniform stratification and a huge number of layers uniformly distributed in
+            ! density, this estimate is too large (as is desired) by a factor of pi^2/6 ~= 1.64.
+            if (H_top(kf(i)) > 0.0) then
+              I_Htot = 1.0 / (H_top(kf(i)) + Hf(kf(i),i))  ! = 1.0 / (H_top(K) + H_bot(K)) for all K.
+              H_bot(kf(i)+1) = 0.0
+              do K=kf(i),2,-1
+                H_bot(K) = H_bot(K+1) + Hf(k,i)
+                dSpVxh_sum = dSpVxh_sum + ((H_top(K) * H_bot(K)) * I_Htot) * &
+                    min(0.0, dSpV_dT(K)*(Tf(k,i)-Tf(k-1,i)) + dSpV_dS(K)*(Sf(k,i)-Sf(k-1,i)))
+              enddo
+            endif
+          else
+            ! This estimate is problematic in that it goes like 1/nz for a large number of layers,
+            ! but it is an overestimate (as desired) for a small number of layers, by at a factor
+            ! of (H1+H2)**2/(H1*H2) >= 4 for two thick layers.
+            do K=2,kf(i)
+              dSpVxh_sum = dSpVxh_sum + 0.5*(Hf(k-1,i)+Hf(k,i)) * &
+                  min(0.0, dSpV_dT(K)*(Tf(k,i)-Tf(k-1,i)) + dSpV_dS(K)*(Sf(k,i)-Sf(k-1,i)))
+            enddo
+          endif
+          ! Note that dSpVxh_sum is negative for stable stratification.
+          cg1_est = H_to_pres * abs(dSpVxh_sum)
         else
           drxh_sum = 0.0
           if (better_est) then
@@ -894,11 +1032,12 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
               drxh_sum = drxh_sum + 0.5*(Hf(k-1,i)+Hf(k,i)) * max(0.0,Rf(k,i)-Rf(k-1,i))
             enddo
           endif
+          cg1_est = g_Rho0 * drxh_sum
         endif
 
         !   Find gprime across each internal interface, taking care of convective
         ! instabilities by merging layers.
-        if (g_Rho0 * drxh_sum > cg1_min2) then
+        if (cg1_est > cg1_min2) then
           ! Merge layers to eliminate convective instabilities or exceedingly
           ! small reduced gravities.  Merging layers reduces the estimated wave speed by
           ! (rho(2)-rho(1))*h(1)*h(2) / H_tot.
@@ -950,7 +1089,57 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
             do K=2,kc ! Revisit this if non-Boussinesq.
               gprime(K) = g_Rho0 * (drho_dT(K)*(Tc(k)-Tc(k-1)) + drho_dS(K)*(Sc(k)-Sc(k-1)))
             enddo
-          else  ! .not.use_EOS
+          elseif (use_nonBous_EOS) then
+            kc = 1
+            Hc(1) = Hf(1,i) ; Tc(1) = Tf(1,i) ; Sc(1) = Sf(1,i)
+            do k=2,kf(i)
+              ! Note the upward differencing here to account for the signs of the specific volume
+              ! derivatives, along with the absolute value because dSpVxh_sum is negative.
+              if (better_est) then
+                merge = ((dSpV_dT(K)*(Tc(kc)-Tf(k,i)) + dSpV_dS(K)*(Sc(kc)-Sf(k,i))) * &
+                         ((Hc(kc) * Hf(k,i))*I_Htot) < abs(2.0 * tol_merge * dSpVxh_sum) )
+              else
+                merge = ((dSpV_dT(K)*(Tc(kc)-Tf(k,i)) + dSpV_dS(K)*(Sc(kc)-Sf(k,i))) * &
+                         (Hc(kc) + Hf(k,i)) < abs(2.0 * tol_merge * dSpVxh_sum) )
+              endif
+              if (merge) then
+                ! Merge this layer with the one above and backtrack.
+                I_Hnew = 1.0 / (Hc(kc) + Hf(k,i))
+                Tc(kc) = (Hc(kc)*Tc(kc) + Hf(k,i)*Tf(k,i)) * I_Hnew
+                Sc(kc) = (Hc(kc)*Sc(kc) + Hf(k,i)*Sf(k,i)) * I_Hnew
+                Hc(kc) = (Hc(kc) + Hf(k,i))
+                ! Backtrack to remove any convective instabilities above...  Note
+                ! that the tolerance is a factor of two larger, to avoid limit how
+                ! far back we go.
+                do K2=kc,2,-1
+                  if (better_est) then
+                    merge = ((dSpV_dT(K2)*(Tc(k2-1)-Tc(k2)) + dSpV_dS(K2)*(Sc(k2-1)-Sc(k2))) * &
+                             ((Hc(k2) * Hc(k2-1))*I_Htot) < abs(tol_merge * dSpVxh_sum) )
+                  else
+                    merge = ((dSpV_dT(K2)*(Tc(k2-1)-Tc(k2)) + dSpV_dS(K2)*(Sc(k2-1)-Sc(k2))) * &
+                             (Hc(k2) + Hc(k2-1)) < abs(tol_merge * dSpVxh_sum) )
+                  endif
+                  if (merge) then
+                    ! Merge the two bottommost layers.  At this point kc = k2.
+                    I_Hnew = 1.0 / (Hc(kc) + Hc(kc-1))
+                    Tc(kc-1) = (Hc(kc)*Tc(kc) + Hc(kc-1)*Tc(kc-1)) * I_Hnew
+                    Sc(kc-1) = (Hc(kc)*Sc(kc) + Hc(kc-1)*Sc(kc-1)) * I_Hnew
+                    Hc(kc-1) = (Hc(kc) + Hc(kc-1))
+                    kc = kc - 1
+                  else ; exit ; endif
+                enddo
+              else
+                ! Add a new layer to the column.
+                kc = kc + 1
+                dSpV_dS(Kc) = dSpV_dS(K) ; dSpV_dT(Kc) = dSpV_dT(K)
+                Tc(kc) = Tf(k,i) ; Sc(kc) = Sf(k,i) ; Hc(kc) = Hf(k,i)
+              endif
+            enddo
+            ! At this point there are kc layers and the gprimes should be positive.
+            do K=2,kc
+              gprime(K) = H_to_pres * (dSpV_dT(K)*(Tc(k-1)-Tc(k)) + dSpV_dS(K)*(Sc(k-1)-Sc(k)))
+            enddo
+          else  ! .not. (use_EOS .or. use_nonBous_EOS)
             ! Do the same with density directly...
             kc = 1
             Hc(1) = Hf(1,i) ; Rc(1) = Rf(1,i)
