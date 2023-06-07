@@ -162,6 +162,8 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
   real :: sum_hc  ! The sum of the layer thicknesses [H ~> m or kg m-2]
   real :: gp      ! A limited local copy of gprime [L2 H-1 T-2 ~> m s-2 or m4 s-1 kg-1]
   real :: N2min   ! A minimum buoyancy frequency, including a slope rescaling factor [L2 H-2 T-2 ~> s-2 or m6 kg-2 s-2]
+  logical :: below_mono_N2_frac  ! True if an interface is below the fractional depth where N2 should not increase.
+  logical :: below_mono_N2_depth ! True if an interface is below the absolute depth where N2 should not increase.
   logical :: l_use_ebt_mode, calc_modal_structure
   real :: l_mono_N2_column_fraction ! A local value of mono_N2_column_fraction [nondim]
   real :: l_mono_N2_depth ! A local value of mono_N2_column_depth [H ~> m or kg m-2]
@@ -541,25 +543,38 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
             Igu(1) = 0. ! Neumann condition for pressure modes
             sum_hc = Hc(1)
             N2min = gprime(2)/Hc(1)
+
+            below_mono_N2_frac = .false.
+            below_mono_N2_depth = .false.
             do k=2,kc
               hw = 0.5*(Hc(k-1)+Hc(k))
               gp = gprime(K)
+
               if (l_mono_N2_column_fraction>0. .or. l_mono_N2_depth>=0.) then
-                !### Change to: if ( ((htot(i) - sum_hc < l_mono_N2_column_fraction*htot(i)) .or. & ) )
-                if ( (((G%bathyT(i,j)+G%Z_ref) - GV%H_to_Z*sum_hc < &
-                       l_mono_N2_column_fraction*(G%bathyT(i,j)+G%Z_ref)) .or. &
-                      ((l_mono_N2_depth >= 0.) .and. (sum_hc > l_mono_N2_depth))) .and. &
-                     (gp > N2min*hw) ) then
-                  ! Filters out regions where N2 increases with depth but only in a lower fraction
+                ! Determine whether N2 estimates should not be allowed to increase with depth.
+                if (l_mono_N2_column_fraction>0.) then
+                  if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+                    below_mono_N2_frac = ((G%bathyT(i,j)+G%Z_ref) - GV%H_to_Z*sum_hc < &
+                                          l_mono_N2_column_fraction*(G%bathyT(i,j)+G%Z_ref))
+                  else
+                    below_mono_N2_frac = (htot(i) - sum_hc < l_mono_N2_column_fraction*htot(i))
+                  endif
+                endif
+                if (l_mono_N2_depth >= 0.) below_mono_N2_depth = (sum_hc > l_mono_N2_depth)
+
+                if ( (gp > N2min*hw) .and. (below_mono_N2_frac .or. below_mono_N2_depth) ) then
+                  ! Filters out regions where N2 increases with depth, but only in a lower fraction
                   ! of the water column or below a certain depth.
                   gp = N2min * hw
                 else
                   N2min = gp / hw
                 endif
               endif
+
               Igu(k) = 1.0/(gp*Hc(k))
               Igl(k-1) = 1.0/(gp*Hc(k-1))
               sum_hc = sum_hc + Hc(k)
+
               if (better_est) then
                 ! Estimate that the ebt_mode is sqrt(2) times the speed of the flat bottom modes.
                 speed2_tot = speed2_tot + 2.0 * gprime(K)*((H_top(K) * H_bot(K)) * I_Htot)
