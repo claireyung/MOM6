@@ -10,7 +10,7 @@ use MOM_diag_mediator,     only : diag_ctrl, time_type, query_averaging_enabled
 use MOM_domains,           only : create_group_pass, do_group_pass
 use MOM_domains,           only : group_pass_type, pass_var, pass_vector
 use MOM_file_parser,       only : get_param, log_version, param_file_type
-use MOM_interface_heights, only : find_eta
+use MOM_interface_heights, only : find_eta, thickness_to_dz
 use MOM_isopycnal_slopes,  only : calc_isoneutral_slopes
 use MOM_grid,              only : ocean_grid_type
 use MOM_unit_scaling,      only : unit_scale_type
@@ -59,12 +59,17 @@ type, public :: VarMix_CS
                                   !! This parameter is set depending on other parameters.
   logical :: calculate_depth_fns !< If true, calculate all the depth factors.
                                   !! This parameter is set depending on other parameters.
-  logical :: calculate_Eady_growth_rate !< If true, calculate all the Eady growth rate.
+  logical :: calculate_Eady_growth_rate !< If true, calculate all the Eady growth rates.
                                   !! This parameter is set depending on other parameters.
   logical :: use_stanley_iso      !< If true, use Stanley parameterization in MOM_isopycnal_slopes
   logical :: use_simpler_Eady_growth_rate !< If true, use a simpler method to calculate the
                                   !! Eady growth rate that avoids division by layer thickness.
                                   !! This parameter is set depending on other parameters.
+  logical :: full_depth_Eady_growth_rate !< If true, calculate the Eady growth rate based on an
+                                  !! average that includes contributions from sea-level changes
+                                  !! in its denominator, rather than just the nominal depth of
+                                  !! the bathymetry.  This only applies when using the model
+                                  !! interface heights as a proxy for isopycnal slopes.
   real :: cropping_distance       !< Distance from surface or bottom to filter out outcropped or
                                   !! incropped interfaces for the Eady growth rate calc [Z ~> m]
   real :: h_min_N2                !< The minimum vertical distance to use in the denominator of the
@@ -488,7 +493,7 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
       call calc_Visbeck_coeffs_old(h, CS%slope_x, CS%slope_y, N2_u, N2_v, G, GV, US, CS)
     else
       !call calc_isoneutral_slopes(G, GV, h, e, tv, dt*CS%kappa_smooth, CS%slope_x, CS%slope_y)
-      call calc_slope_functions_using_just_e(h, G, GV, US, CS, e, .true.)
+      call calc_slope_functions_using_just_e(h, G, GV, US, CS, e, tv, .true.)
     endif
   endif
 
@@ -811,19 +816,23 @@ end subroutine calc_Eady_growth_rate_2D
 
 !> The original calc_slope_function() that calculated slopes using
 !! interface positions only, not accounting for density variations.
-subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slopes)
+subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, tv, calculate_slopes)
   type(ocean_grid_type),                       intent(inout) :: G  !< Ocean grid structure
   type(verticalGrid_type),                     intent(in)    :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   intent(inout) :: h  !< Layer thickness [H ~> m or kg m-2]
   type(unit_scale_type),                       intent(in)    :: US !< A dimensional unit scaling type
   type(VarMix_CS),                             intent(inout) :: CS !< Variable mixing control structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: e  !< Interface position [Z ~> m]
+  type(thermo_var_ptrs),                       intent(in)    :: tv !< Thermodynamic variables
   logical,                                     intent(in)    :: calculate_slopes !< If true, calculate slopes
                                                                    !! internally otherwise use slopes stored in CS
   ! Local variables
   real :: E_x(SZIB_(G),SZJ_(G))  ! X-slope of interface at u points [Z L-1 ~> nondim] (for diagnostics)
   real :: E_y(SZI_(G),SZJB_(G))  ! Y-slope of interface at v points [Z L-1 ~> nondim] (for diagnostics)
+  real :: dz_tot(SZI_(G),SZJ_(G)) ! The total thickness of the water columns [Z ~> m]
+  ! real :: dz(SZI_(G),SZJ_(G),SZK_(GV)) ! The vertical distance across each layer [Z ~> m]
   real :: H_cutoff      ! Local estimate of a minimum thickness for masking [H ~> m or kg m-2]
+  real :: dZ_cutoff     ! A minimum water column depth for masking [H ~> m or kg m-2]
   real :: h_neglect     ! A thickness that is so small it is usually lost
                         ! in roundoff and can be neglected [H ~> m or kg m-2].
   real :: S2            ! Interface slope squared [Z2 L-2 ~> nondim]
@@ -834,6 +843,8 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
                         ! the buoyancy frequency squared at u-points [Z T-2 ~> m s-2]
   real :: S2N2_v_local(SZI_(G),SZJB_(G),SZK_(GV)) ! The depth integral of the slope times
                         ! the buoyancy frequency squared at v-points [Z T-2 ~> m s-2]
+  logical :: use_dztot  ! If true, use the total water column thickness rather than the
+                        ! bathymetric depth for certain calculations.
   integer :: is, ie, js, je, nz
   integer :: i, j, k
   integer :: l_seg
@@ -851,6 +862,25 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
 
   h_neglect = GV%H_subroundoff
   H_cutoff = real(2*nz) * (GV%Angstrom_H + h_neglect)
+  dZ_cutoff = real(2*nz) * (GV%Angstrom_Z + GV%dz_subroundoff)
+
+  use_dztot = CS%full_depth_Eady_growth_rate ! .or. .not.(GV%Boussinesq or GV%semi_Boussinesq)
+
+  if (use_dztot) then
+    ! call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
+    !$OMP parallel do default(shared)
+    ! do j=js-1,je+1
+    !   do i=is-1,ie+1 ; dz_tot(i,j) = 0.0 ; enddo
+    !   do k=1,nz ; do i=is-1,ie+1
+    !     dz_tot(i,j) = dz_tot(i,j) + dz(i,j,k)
+    !   enddo ; enddo
+    ! enddo
+    ! The calculation above is more expensive but is less sensitive to roundoff for large Z_ref
+    ! than the following mathematically equivalent expression:
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      dz_tot(i,j) = e(i,j,1) - e(i,j,nz+1)
+    enddo ; enddo
+  endif
 
   ! To set the length scale based on the deformation radius, use wave_speed to
   ! calculate the first-mode gravity wave speed and then blend the equatorial
@@ -864,28 +894,28 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
       do j=js-1,je+1 ; do I=is-1,ie
         E_x(I,j) = (e(i+1,j,K)-e(i,j,K))*G%IdxCu(I,j)
         ! Mask slopes where interface intersects topography
-        if (min(h(I,j,k),h(I+1,j,k)) < H_cutoff) E_x(I,j) = 0.
+        if (min(h(i,j,k),h(i+1,j,k)) < H_cutoff) E_x(I,j) = 0.
       enddo ; enddo
       do J=js-1,je ; do i=is-1,ie+1
         E_y(i,J) = (e(i,j+1,K)-e(i,j,K))*G%IdyCv(i,J)
         ! Mask slopes where interface intersects topography
-        if (min(h(i,J,k),h(i,J+1,k)) < H_cutoff) E_y(I,j) = 0.
+        if (min(h(i,j,k),h(i,j+1,k)) < H_cutoff) E_y(i,J) = 0.
       enddo ; enddo
     else ! This branch is not used.
       do j=js-1,je+1 ; do I=is-1,ie
         E_x(I,j) = CS%slope_x(I,j,k)
-        if (min(h(I,j,k),h(I+1,j,k)) < H_cutoff) E_x(I,j) = 0.
+        if (min(h(i,j,k),h(i+1,j,k)) < H_cutoff) E_x(I,j) = 0.
       enddo ; enddo
-      do j=js-1,je ; do I=is-1,ie+1
+      do J=js-1,je ; do i=is-1,ie+1
         E_y(i,J) = CS%slope_y(i,J,k)
-        if (min(h(i,J,k),h(i,J+1,k)) < H_cutoff) E_y(I,j) = 0.
+        if (min(h(i,j,k),h(i,j+1,k)) < H_cutoff) E_y(i,J) = 0.
       enddo ; enddo
     endif
 
     ! Calculate N*S*h from this layer and add to the sum
     do j=js,je ; do I=is-1,ie
       S2 = ( E_x(I,j)**2  + 0.25*( &
-            (E_y(I,j)**2+E_y(I+1,j-1)**2) + (E_y(I+1,j)**2+E_y(I,j-1)**2) ) )
+            (E_y(i,J)**2+E_y(i+1,J-1)**2) + (E_y(i+1,J)**2+E_y(i,J-1)**2) ) )
       if (min(h(i,j,k-1), h(i+1,j,k-1), h(i,j,k), h(i+1,j,k)) < H_cutoff) S2 = 0.0
 
       Hdn = 2.*h(i,j,k)*h(i,j,k-1) / (h(i,j,k) + h(i,j,k-1) + h_neglect)
@@ -896,7 +926,7 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
     enddo ; enddo
     do J=js-1,je ; do i=is,ie
       S2 = ( E_y(i,J)**2  + 0.25*( &
-            (E_x(i,J)**2+E_x(i-1,J+1)**2) + (E_x(i,J+1)**2+E_x(i-1,J)**2) ) )
+            (E_x(I,j)**2+E_x(I-1,j+1)**2) + (E_x(I,j+1)**2+E_x(I-1,j)**2) ) )
       if (min(h(i,j,k-1), h(i,j+1,k-1), h(i,j,k), h(i,j+1,k)) < H_cutoff) S2 = 0.0
 
       Hdn = 2.*h(i,j,k)*h(i,j,k-1) / (h(i,j,k) + h(i,j,k-1) + h_neglect)
@@ -907,6 +937,7 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
     enddo ; enddo
 
   enddo ! k
+
   !$OMP parallel do default(shared)
   do j=js,je
     do I=is-1,ie ; CS%SN_u(I,j) = 0.0 ; enddo
@@ -914,17 +945,22 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
       CS%SN_u(I,j) = CS%SN_u(I,j) + S2N2_u_local(I,j,k)
     enddo ; enddo
     ! SN above contains S^2*N^2*H, convert to vertical average of S*N
-    do I=is-1,ie
-      !### Replace G%bathT+G%Z_ref here with the total water column thickness.
-      !SN_u(I,j) = sqrt( SN_u(I,j) / ( max(G%bathyT(i,j), G%bathyT(i+1,j)) + (G%Z_ref + GV%Angstrom_Z) ) )
-      !The code below behaves better than the line above. Not sure why? AJA
-      if ( min(G%bathyT(i,j), G%bathyT(i+1,j)) + G%Z_ref > H_cutoff*GV%H_to_Z ) then
+
+    if (use_dztot) then
+      do I=is-1,ie
         CS%SN_u(I,j) = G%OBCmaskCu(I,j) * sqrt( CS%SN_u(I,j) / &
-                                               (max(G%bathyT(i,j), G%bathyT(i+1,j)) + G%Z_ref) )
-      else
-        CS%SN_u(I,j) = 0.0
-      endif
-    enddo
+                                                max(dz_tot(i,j), dz_tot(i+1,j), GV%dz_subroundoff) )
+      enddo
+    else
+      do I=is-1,ie
+        if ( min(G%bathyT(i,j), G%bathyT(i+1,j)) + G%Z_ref > dZ_cutoff ) then
+          CS%SN_u(I,j) = G%OBCmaskCu(I,j) * sqrt( CS%SN_u(I,j) / &
+                                                  (max(G%bathyT(i,j), G%bathyT(i+1,j)) + G%Z_ref) )
+        else
+          CS%SN_u(I,j) = 0.0
+        endif
+      enddo
+    endif
   enddo
   !$OMP parallel do default(shared)
   do J=js-1,je
@@ -932,17 +968,24 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
     do k=nz,CS%VarMix_Ktop,-1 ; do i=is,ie
       CS%SN_v(i,J) = CS%SN_v(i,J) + S2N2_v_local(i,J,k)
     enddo ; enddo
-    do i=is,ie
-      !### Replace G%bathT+G%Z_ref here with (e(i,j,1) - e(i,j,nz+1)).
-      !SN_v(i,J) = sqrt( SN_v(i,J) / ( max(G%bathyT(i,J), G%bathyT(i,J+1)) + (G%Z_ref + GV%Angstrom_Z) ) )
-      !The code below behaves better than the line above. Not sure why? AJA
-      if ( min(G%bathyT(i,j), G%bathyT(i+1,j)) + G%Z_ref > H_cutoff*GV%H_to_Z ) then
+    if (use_dztot) then
+      do i=is,ie
         CS%SN_v(i,J) = G%OBCmaskCv(i,J) * sqrt( CS%SN_v(i,J) / &
-                                               (max(G%bathyT(i,j), G%bathyT(i,j+1)) + G%Z_ref) )
-      else
-        CS%SN_v(i,J) = 0.0
-      endif
-    enddo
+                                                max(dz_tot(i,j), dz_tot(i,j+1), GV%dz_subroundoff) )
+      enddo
+    else
+      do i=is,ie
+        ! There is a primordial horizontal indexing bug on the following line from the previous
+        ! versions of the code.  This comment should be deleted by the end of 2024.
+        ! if ( min(G%bathyT(i,j), G%bathyT(i+1,j)) + G%Z_ref > dZ_cutoff ) then
+        if ( min(G%bathyT(i,j), G%bathyT(i,j+1)) + G%Z_ref > dZ_cutoff ) then
+          CS%SN_v(i,J) = G%OBCmaskCv(i,J) * sqrt( CS%SN_v(i,J) / &
+                                                  (max(G%bathyT(i,j), G%bathyT(i,j+1)) + G%Z_ref) )
+        else
+          CS%SN_v(i,J) = 0.0
+        endif
+      enddo
+    endif
   enddo
 
 end subroutine calc_slope_functions_using_just_e
@@ -1145,7 +1188,8 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
   CS%calculate_cg1 = .false.
   CS%calculate_Rd_dx = .false.
   CS%calculate_res_fns = .false.
-  CS%use_simpler_Eady_growth_rate = .false.
+  CS%use_simpler_Eady_growth_rate  = .false.
+  CS%full_depth_Eady_growth_rate = .false.
   CS%calculate_depth_fns = .false.
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
@@ -1299,7 +1343,15 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                      "The minimum vertical distance to use in the denominator of the "//&
                      "bouyancy frequency used in the slope calculation.", &
                      units="m", default=1.0, scale=GV%m_to_H, do_not_log=CS%use_stored_slopes)
-    endif
+
+      call get_param(param_file, mdl, "FULL_DEPTH_EADY_GROWTH_RATE", CS%full_depth_Eady_growth_rate, &
+                   "If true, calculate the Eady growth rate based on average slope times "//&
+                   "stratification that includes contributions from sea-level changes "//&
+                   "in its denominator, rather than just the nominal depth of the bathymetry.  "//&
+                   "This only applies when using the model interface heights as a proxy for "//&
+                   "isopycnal slopes.", default=.not.(GV%Boussinesq.or.GV%semi_Boussinesq), &
+                   do_not_log=CS%use_stored_slopes)
+    endif;
   endif
 
   if (KhTr_Slope_Cff>0. .or. KhTh_Slope_Cff>0.) then
