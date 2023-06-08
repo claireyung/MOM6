@@ -16,6 +16,7 @@ use MOM_unit_scaling,      only : unit_scale_type
 use MOM_variables,         only : thermo_var_ptrs
 use MOM_verticalGrid,      only : verticalGrid_type
 use MOM_EOS,               only : calculate_density_derivs
+use MOM_EOS,               only : calculate_density, calculate_specific_vol_derivs
 
 implicit none ; private
 
@@ -186,7 +187,7 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
   use_temperature = associated(tv%T)
 
   k0dt = dt*CS%kappa_0
-  dz_massless = 0.1*sqrt(GV%Z_to_H*k0dt)
+  dz_massless = 0.1*sqrt((US%Z_to_m*GV%m_to_H)*k0dt)
 
   !$OMP parallel do default(private) shared(js,je,is,ie,nz,h,u_in,v_in,use_temperature,tv,G,GV,US, &
   !$OMP                                     CS,kappa_io,dz_massless,k0dt,p_surf,dt,tke_io,kv_io)
@@ -427,7 +428,7 @@ subroutine Calc_kappa_shear_vertex(u_in, v_in, h, T_in, S_in, tv, p_surf, kappa_
   use_temperature = associated(tv%T)
 
   k0dt =  dt*CS%kappa_0
-  dz_massless = 0.1*sqrt(GV%Z_to_H*k0dt)
+  dz_massless = 0.1*sqrt((US%Z_to_m*GV%m_to_H)*k0dt)
   I_Prandtl = 0.0 ; if (CS%Prandtl_turb > 0.0) I_Prandtl = 1.0 / CS%Prandtl_turb
 
   ! Convert layer thicknesses into geometric thickness in height units.
@@ -699,6 +700,9 @@ subroutine kappa_shear_column(kappa, tke, dt, nzc, f2, surface_pres, hlay, dz_la
     Sal_int, &  ! The salinity interpolated to an interface [S ~> ppt].
     dbuoy_dT, & ! The partial derivative of buoyancy with changes in temperature [Z T-2 C-1 ~> m s-2 degC-1]
     dbuoy_dS, & ! The partial derivative of buoyancy with changes in salinity [Z T-2 S-1 ~> m s-2 ppt-1]
+    dSpV_dT, &  ! The partial derivative of specific volume with changes in temperature [R-1 C-1 ~> m3 kg-1 degC-1]
+    dSpV_dS, &  ! The partial derivative of specific volume with changes in salinity [R-1 S-1 ~> m3 kg-1 ppt-1]
+    rho_int, &  ! The in situ density interpolated to an interface [R ~> kg m-3]
     I_L2_bdry, &   ! The inverse of the square of twice the harmonic mean
                    ! distance to the top and bottom boundaries [H-1 Z-1 ~> m-2 or m kg-1].
     K_Q, &         ! Diffusivity divided by TKE [H T Z-1 ~> s or kg s m-3]
@@ -858,7 +862,14 @@ subroutine kappa_shear_column(kappa, tke, dt, nzc, f2, surface_pres, hlay, dz_la
   else
     ! Find an effective average specific volume around an interface.
     dz_h_Int(1:nzc+1) = 0.0
-    do K=2,nzc ; if (h_Int(K) > 0.0) dz_h_Int(K) = dz_Int(K) / h_Int(K) ; enddo
+    if (hlay(1) > 0.0) dz_h_Int(1) = dz_lay(1) / hlay(1)
+    do K=2,nzc+1
+      if (h_Int(K) > 0.0) then
+        dz_h_Int(K) = dz_Int(K) / h_Int(K)
+      else
+        dz_h_Int(K) = dz_h_Int(K-1)
+      endif
+    enddo
   endif
 
   ! Calculate thermodynamic coefficients and an initial estimate of N2.
@@ -869,8 +880,20 @@ subroutine kappa_shear_column(kappa, tke, dt, nzc, f2, surface_pres, hlay, dz_la
       T_int(K) = 0.5*(T(k-1) + T(k))
       Sal_int(K) = 0.5*(Sal(k-1) + Sal(k))
     enddo
-    call calculate_density_derivs(T_int, Sal_int, pressure, dbuoy_dT, dbuoy_dS, &
-                                  tv%eqn_of_state, (/2,nzc/), scale=-g_R0 )
+    if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+      call calculate_density_derivs(T_int, Sal_int, pressure, dbuoy_dT, dbuoy_dS, &
+                                    tv%eqn_of_state, (/2,nzc/), scale=-g_R0 )
+    else
+      ! These should perhaps be combined into a single call to calculate the thermal expansion
+      ! and haline contraction coefficients?
+      call calculate_specific_vol_derivs(T_int, Sal_int, pressure, dSpV_dT, dSpV_dS, &
+                                    tv%eqn_of_state, (/2,nzc/) )
+      call calculate_density(T_int, Sal_int, pressure, rho_int, tv%eqn_of_state, (/2,nzc/) )
+      do K=2,nzc
+        dbuoy_dT(K) = (US%L_to_Z**2 * GV%g_Earth) * (rho_int(K) * dSpV_dT(K))
+        dbuoy_dS(K) = (US%L_to_Z**2 * GV%g_Earth) * (rho_int(K) * dSpV_dS(K))
+      enddo
+    endif
   else
     do K=1,nzc+1 ; dbuoy_dT(K) = -g_R0 ; dbuoy_dS(K) = 0.0 ; enddo
   endif
