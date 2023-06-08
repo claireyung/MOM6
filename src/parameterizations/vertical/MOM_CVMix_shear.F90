@@ -138,7 +138,11 @@ subroutine calculate_CVMix_shear(u_H, v_H, h, tv, kd, kv, G, GV, US, CS )
         kk = 2*(k-1)
         DU = u_h(i,j,k) - u_h(i,j,km1)
         DV = v_h(i,j,k) - v_h(i,j,km1)
-        DRHO = GoRho * (rho_1D(kk+1) - rho_1D(kk+2))
+        if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+          dRho = GoRho * (rho_1D(kk+1) - rho_1D(kk+2))
+        else
+          dRho = (US%L_to_Z**2 * GV%g_Earth) * (rho_1D(kk+1) - rho_1D(kk+2)) / (0.5*(rho_1D(kk+1) + rho_1D(kk+2)))
+        endif
         dz_int = 0.5*(dz(i,km1) + dz(i,k)) + GV%dZ_subroundoff
         N2 = DRHO / dz_int
         S2 = US%L_to_Z**2*(DU*DU + DV*DV) / (dz_int*dz_int)
