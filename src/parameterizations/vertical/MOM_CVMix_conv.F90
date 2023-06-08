@@ -11,7 +11,6 @@ use MOM_error_handler,  only : MOM_error, is_root_pe, FATAL, WARNING, NOTE
 use MOM_file_parser,    only : openParameterBlock, closeParameterBlock
 use MOM_file_parser,    only : get_param, log_version, param_file_type
 use MOM_grid,           only : ocean_grid_type
-use MOM_interface_heights, only : thickness_to_dz
 use MOM_unit_scaling,   only : unit_scale_type
 use MOM_variables,      only : thermo_var_ptrs
 use MOM_verticalGrid,   only : verticalGrid_type
@@ -166,21 +165,24 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
   real, dimension(SZK_(GV)+1) :: kd_col !< Diffusivities at interfaces in the column [m2 s-1]
   real, dimension(SZK_(GV)+1) :: iFaceHeight !< Height of interfaces [H ~> m or kg m-2]
   real, dimension(SZK_(GV))   :: cellHeight  !< Height of cell centers [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZK_(GV)) :: dz    !< Height change across layers [Z ~> m]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) :: &
     kd_conv, &                         !< Diffusivity added by convection for diagnostics [Z2 T-1 ~> m2 s-1]
     kv_conv, &                         !< Viscosity added by convection for diagnostics [Z2 T-1 ~> m2 s-1]
     N2_3d                              !< Squared buoyancy frequency for diagnostics [T-2 ~> s-2]
   integer :: kOBL                      !< level of ocean boundary layer extent
-  real :: g_o_rho0  ! Gravitational acceleration divided by density times unit conversion factors
-                    ! [Z s-2 R-1 ~> m4 s-2 kg-1]
+  real :: g_o_rho0  ! Gravitational acceleration, perhaps divided by density, times unit conversion factors
+                    ! [H s-2 R-1 ~> m4 s-2 kg-1 or m s-2]
   real :: pref      ! Interface pressures [R L2 T-2 ~> Pa]
   real :: rhok, rhokm1 ! In situ densities of the layers above and below at the interface pressure [R ~> kg m-3]
-  real :: dz_int    ! The distance between layer centers [Z ~> m]
+  real :: dh_int    ! The distance between layer centers [H ~> m or kg m-2]
   real :: dh, hcorr ! Limited thicknesses and a cumulative correction [H ~> m or kg m-2]
   integer :: i, j, k
 
-  g_o_rho0 = US%L_to_Z**2*US%s_to_T**2 * GV%g_Earth / GV%Rho0
+  if (GV%Boussinesq) then
+    g_o_rho0 = (US%L_to_Z**2*US%s_to_T**2*GV%Z_to_H) * GV%g_Earth / GV%Rho0
+  else
+    g_o_rho0 = (US%L_to_Z**2*US%s_to_T**2*GV%RZ_to_H) * GV%g_Earth
+  endif
 
   ! initialize dummy variables
   rho_lwr(:) = 0.0 ; rho_1d(:) = 0.0
@@ -193,9 +195,6 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
   if (CS%id_kd_conv > 0) Kd_conv(:,:,:) = 0.0
 
   do j = G%jsc, G%jec
-
-    ! Find the vertical distances across layers.
-    call thickness_to_dz(h, tv, dz, j, G, GV)
 
     do i = G%isc, G%iec
 
@@ -211,8 +210,8 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
         call calculate_density(tv%t(i,j,k), tv%s(i,j,k), pRef, rhok, tv%eqn_of_state)
         call calculate_density(tv%t(i,j,k-1), tv%s(i,j,k-1), pRef, rhokm1, tv%eqn_of_state)
 
-        dz_int = 0.5*(dz(i,k-1) + dz(i,k)) + GV%dZ_subroundoff
-        N2(K) = g_o_rho0 * (rhok - rhokm1) / dz_int ! Can be negative
+        dh_int = 0.5*(h(i,j,k-1) + h(i,j,k)) + GV%H_subroundoff
+        N2(K) = g_o_rho0 * (rhok - rhokm1) / dh_int ! Can be negative
 
       enddo
 
