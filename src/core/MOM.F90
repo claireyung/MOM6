@@ -1093,7 +1093,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
   call cpu_clock_end(id_clock_stoch)
   call cpu_clock_begin(id_clock_varT)
   if (CS%use_stochastic_EOS) then
-    call MOM_calc_varT(G, GV, h, CS%tv, CS%stoch_eos_CS, dt)
+    call MOM_calc_varT(G, GV, US, h, CS%tv, CS%stoch_eos_CS, dt)
     if (associated(CS%tv%varT)) call pass_var(CS%tv%varT, G%Domain, clock=id_clock_pass, halo=1)
   endif
   call cpu_clock_end(id_clock_varT)
@@ -1999,6 +1999,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                                ! updated first in directionally split parts of the
                                ! calculation.
   logical :: use_KPP           ! If true, diabatic is using KPP vertical mixing
+  logical :: non_Bous          ! If true, this run is fully non-Boussinesq
+  logical :: Boussinesq        ! If true, this run is fully Boussinesq
+  logical :: semi_Boussinesq   ! If true, this run is partially non-Boussinesq
   integer :: nkml, nkbl, verbosity, write_geom
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
@@ -2061,10 +2064,18 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                  default=.false.)
   endif
 
+  call get_param(param_file, "MOM", "BOUSSINESQ", Boussinesq, &
+                 "If true, make the Boussinesq approximation.", default=.true., do_not_log=.true.)
+  call get_param(param_file, "MOM", "SEMI_BOUSSINESQ", semi_Boussinesq, &
+                 "If true, do non-Boussinesq pressure force calculations and use mass-based "//&
+                 "thicknesses, but use RHO_0 to convert layer thicknesses into certain "//&
+                 "height changes.  This only applies if BOUSSINESQ is false.", &
+                 default=.true., do_not_log=.true.)
+  non_Bous = .not.(Boussinesq .or. semi_Boussinesq)
   call get_param(param_file, "MOM", "CALC_RHO_FOR_SEA_LEVEL", CS%calc_rho_for_sea_lev, &
                  "If true, the in-situ density is used to calculate the "//&
                  "effective sea level that is returned to the coupler. If false, "//&
-                 "the Boussinesq parameter RHO_0 is used.", default=.false.)
+                 "the Boussinesq parameter RHO_0 is used.", default=non_Bous)
   call get_param(param_file, "MOM", "ENABLE_THERMODYNAMICS", use_temperature, &
                  "If true, Temperature and salinity are used as state "//&
                  "variables.", default=.true.)
@@ -3006,7 +3017,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
 
   new_sim = is_new_run(restart_CSp)
   if (use_temperature) then
-    CS%use_stochastic_EOS = MOM_stoch_eos_init(Time, G, US, param_file, diag, CS%stoch_eos_CS, restart_CSp)
+    CS%use_stochastic_EOS = MOM_stoch_eos_init(Time, G, GV, US, param_file, diag, CS%stoch_eos_CS, restart_CSp)
   else
     CS%use_stochastic_EOS = .false.
   endif
