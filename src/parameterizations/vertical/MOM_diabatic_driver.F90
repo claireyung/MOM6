@@ -149,7 +149,7 @@ type, public :: diabatic_CS ; private
                                      !! diffusivity of Kd_min_tr (see below) were operating.
   real    :: Kd_BBL_tr               !< A bottom boundary layer tracer diffusivity that
                                      !! will allow for explicitly specified bottom fluxes
-                                     !! [H Z T-1 ~> m2 s-1 or kg m-1 s-2].  The entrainment at the
+                                     !! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-2].  The entrainment at the
                                      !! bottom is at least sqrt(Kd_BBL_tr*dt) over the same distance.
   real    :: Kd_min_tr               !< A minimal diffusivity that should always be
                                      !! applied to tracers, especially in massless layers
@@ -1021,7 +1021,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
   call cpu_clock_begin(id_clock_tracers)
 
   if (CS%mix_boundary_tracer_ALE) then
-    Tr_ea_BBL = sqrt((dt * CS%Kd_BBL_tr) * GV%Z_to_H)
+    Tr_ea_BBL = sqrt(dt * CS%Kd_BBL_tr)
 
     !$OMP parallel do default(shared) private(htot,in_boundary,add_ent)
     do j=js,je
@@ -1555,7 +1555,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
   call cpu_clock_begin(id_clock_tracers)
 
   if (CS%mix_boundary_tracer_ALE) then
-    Tr_ea_BBL = sqrt((dt * CS%Kd_BBL_tr) * GV%Z_to_H)
+    Tr_ea_BBL = sqrt(dt * CS%Kd_BBL_tr)
     !$OMP parallel do default(shared) private(htot,in_boundary,add_ent)
     do j=js,je
       do i=is,ie
@@ -2325,7 +2325,7 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
     call thickness_to_dz(hold, tv, dz_old, G, GV, US)
 
   if (CS%mix_boundary_tracers) then
-    Tr_ea_BBL = sqrt((dt * CS%Kd_BBL_tr) * GV%Z_to_H)
+    Tr_ea_BBL = sqrt(dt * CS%Kd_BBL_tr)
     !$OMP parallel do default(shared) private(htot,in_boundary,add_ent)
     do j=js,je
       do i=is,ie
@@ -3135,7 +3135,9 @@ subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, di
                  "A bottom boundary layer tracer diffusivity that will "//&
                  "allow for explicitly specified bottom fluxes. The "//&
                  "entrainment at the bottom is at least sqrt(Kd_BBL_tr*dt) "//&
-                 "over the same distance.", units="m2 s-1", default=0., scale=GV%m2_s_to_HZ_T)
+                 "over the same distance.", &
+                 units="m2 s-1", default=0., scale=GV%m2_s_to_HZ_T*(US%Z_to_m*GV%m_to_H))
+                 ! The scaling factor here is usually equivalent to GV%m2_s_to_HZ_T*GV%Z_to_H.
   endif
 
   call get_param(param_file, mdl, "TRACER_TRIDIAG", CS%tracer_tridiag, &
