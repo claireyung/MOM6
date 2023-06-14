@@ -1366,6 +1366,8 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
             ! Sriver = 0 (i.e. rivers are assumed to be pure freshwater)
             if (GV%Boussinesq) then
               RivermixConst = -0.5*(CS%rivermix_depth*dt) * ( US%L_to_Z**2*GV%g_Earth ) * GV%Rho0
+            elseif (allocated(tv%SpV_avg)) then
+              RivermixConst = -0.5*(CS%rivermix_depth*dt) * ( US%L_to_Z**2*GV%g_Earth ) / tv%SpV_avg(i,j,1)
             else
               RivermixConst = -0.5*(CS%rivermix_depth*dt) * GV%Rho0 * ( US%L_to_Z**2*GV%g_Earth )
             endif
