@@ -673,8 +673,9 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     dt_therm = dt ; ntstep = 1
     if (associated(fluxes%p_surf)) p_surf => fluxes%p_surf
     CS%tv%p_surf => NULL()
-    if (associated(fluxes%p_surf)) then
-      if (CS%use_p_surf_in_EOS) CS%tv%p_surf => fluxes%p_surf
+    if (CS%use_p_surf_in_EOS .and. associated(fluxes%p_surf)) then
+      CS%tv%p_surf => fluxes%p_surf
+      if (allocated(CS%tv%SpV_avg)) call pass_var(fluxes%p_surf, G%Domain, clock=id_clock_pass)
     endif
     if (CS%UseWaves) call pass_var(fluxes%ustar, G%Domain, clock=id_clock_pass)
   endif
@@ -1396,6 +1397,8 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
 
   if (associated(CS%tv%T)) then
     call extract_diabatic_member(CS%diabatic_CSp, diabatic_halo=halo_sz)
+    ! The bottom boundary layer calculation may need halo values of SpV_avg, including the corners.
+    if (allocated(CS%tv%SpV_avg)) halo_sz = max(halo_sz, 1)
     if (halo_sz > 0) then
       call create_group_pass(pass_T_S, CS%tv%T, G%Domain, To_All, halo=halo_sz)
       call create_group_pass(pass_T_S, CS%tv%S, G%Domain, To_All, halo=halo_sz)
@@ -1411,7 +1414,7 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
 
     ! Update derived thermodynamic quantities.
     if (allocated(CS%tv%SpV_avg)) then
-      call calc_derived_thermo(CS%tv, h, G, GV, US, halo=halo_sz)
+      call calc_derived_thermo(CS%tv, h, G, GV, US, halo=halo_sz, debug=CS%debug)
     endif
   endif
 
@@ -1595,7 +1598,7 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
 
     ! Update derived thermodynamic quantities.
     if (allocated(tv%SpV_avg)) then
-      call calc_derived_thermo(tv, h, G, GV, US, halo=dynamics_stencil)
+      call calc_derived_thermo(tv, h, G, GV, US, halo=dynamics_stencil, debug=CS%debug)
     endif
 
     if (CS%debug .and. CS%use_ALE_algorithm) then
@@ -1651,7 +1654,7 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
 
       ! Update derived thermodynamic quantities.
       if (allocated(tv%SpV_avg)) then
-        call calc_derived_thermo(tv, h, G, GV, US, halo=dynamics_stencil)
+        call calc_derived_thermo(tv, h, G, GV, US, halo=dynamics_stencil, debug=CS%debug)
       endif
     endif
 
@@ -3153,7 +3156,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
 
   ! Update derived thermodynamic quantities.
   if (allocated(CS%tv%SpV_avg)) then
-    call calc_derived_thermo(CS%tv, CS%h, G, GV, US, halo=dynamics_stencil)
+    !### There may be a restart issue here with the surface pressure not being updated?
+    call calc_derived_thermo(CS%tv, CS%h, G, GV, US, halo=dynamics_stencil, debug=CS%debug)
   endif
 
   if (associated(CS%visc%Kv_shear)) &
