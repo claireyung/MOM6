@@ -1207,7 +1207,7 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
   !$OMP                                  EnthalpyConst)                  &
   !$OMP                          private(opacityBand,h2d,T2d,netMassInOut,netMassOut,      &
   !$OMP                                  netHeat,netSalt,Pen_SW_bnd,fractionOfForcing,     &
-  !$OMP                                  IforcingDepthScale,                               &
+  !$OMP                                  IforcingDepthScale,g_conv,dSpV_dT,dSpV_dS,        &
   !$OMP                                  dThickness,dTemp,dSalt,hOld,Ithickness,           &
   !$OMP                                  netMassIn,pres,d_pres,p_lay,dSV_dT_2d,            &
   !$OMP                                  netmassinout_rate,netheat_rate,netsalt_rate,      &

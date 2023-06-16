@@ -841,17 +841,18 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
   EOSdom_h1(:) = EOS_domain(G%HI, halo=1)
 
   !$OMP parallel do default(none) shared(nz,is,ie,js,je,find_work,use_EOS,G,GV,US,pres,T,S, &
-  !$OMP                                  nk_linear,IsdB,tv,h,h_neglect,e,dz,dz_neglect,I_slope_max2, &
-  !$OMP                                  h_neglect2,int_slope_u,KH_u,uhtot,h_frac,h_avail_rsum, &
-  !$OMP                                  uhD,h_avail,Work_u,CS,slope_x,cg1, &
+  !$OMP                                  nk_linear,IsdB,tv,h,h_neglect,e,dz,dz_neglect,dz_neglect2, &
+  !$OMP                                  h_neglect2,hn_2,I_slope_max2,int_slope_u,KH_u,uhtot, &
+  !$OMP                                  h_frac,h_avail_rsum,uhD,h_avail,Work_u,CS,slope_x,cg1, &
   !$OMP                                  diag_sfn_x,diag_sfn_unlim_x,N2_floor,EOSdom_u,EOSdom_h1, &
   !$OMP                                  use_stanley,Tsgs2,present_slope_x,G_rho0,Slope_x_PE,hN2_x_PE) &
   !$OMP                          private(drdiA,drdiB,drdkL,drdkR,pres_u,T_u,S_u,G_scale, &
   !$OMP                                  drho_dT_u,drho_dS_u,hg2A,hg2B,hg2L,hg2R,haA, &
   !$OMP                                  drho_dT_dT_h,scrap,pres_h,T_h,S_h,N2_unlim,  &
   !$OMP                                  haB,haL,haR,dzaL,dzaR,wtA,wtB,wtL,wtR,drdz,  &
+  !$OMP                                  dzg2A,dzg2B,dzaA,dzaB,dz_harm, &
   !$OMP                                  drdx,mag_grad2,Slope,slope2_Ratio_u,dzN2_u,  &
-  !$OMP                                  Sfn_unlim_u,Rho_avg,drdi_u,drdkDe_u,dz_harm,c2_dz_u, &
+  !$OMP                                  Sfn_unlim_u,Rho_avg,drdi_u,drdkDe_u,c2_dz_u, &
   !$OMP                                  Sfn_safe,Sfn_est,Sfn_in_h,calc_derivatives)
   do j=js,je
     do I=is-1,ie ; dzN2_u(I,1) = 0. ; dzN2_u(I,nz+1) = 0. ; enddo
@@ -1150,18 +1151,19 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
 
   ! Calculate the meridional fluxes and gradients.
 
-  !$OMP parallel do default(none) shared(nz,is,ie,js,je,find_work,use_EOS,G,GV,US,pres,T,S, &
-  !$OMP                                  nk_linear,IsdB,tv,h,h_neglect,e,dz_neglect,I_slope_max2, &
+  !$OMP parallel do default(none) shared(nz,is,ie,js,je,find_work,use_EOS,G,GV,US,pres,T,S,dz, &
+  !$OMP                                  nk_linear,IsdB,tv,h,h_neglect,e,dz_neglect,dz_neglect2, &
   !$OMP                                  h_neglect2,int_slope_v,KH_v,vhtot,h_frac,h_avail_rsum, &
-  !$OMP                                  vhD,h_avail,Work_v,CS,slope_y,cg1,&
+  !$OMP                                  I_slope_max2,vhD,h_avail,Work_v,CS,slope_y,cg1,hn_2,&
   !$OMP                                  diag_sfn_y,diag_sfn_unlim_y,N2_floor,EOSdom_v,use_stanley,&
   !$OMP                                  Tsgs2, present_slope_y,G_rho0,Slope_y_PE,hN2_y_PE)  &
   !$OMP                          private(drdjA,drdjB,drdkL,drdkR,pres_v,T_v,S_v,S_h,S_hr,    &
   !$OMP                                  drho_dT_v,drho_dS_v,hg2A,hg2B,hg2L,hg2R,haA,G_scale, &
   !$OMP                                  drho_dT_dT_h,drho_dT_dT_hr,scrap,pres_h,T_h,T_hr,   &
   !$OMP                                  haB,haL,haR,dzaL,dzaR,wtA,wtB,wtL,wtR,drdz,pres_hr, &
+  !$OMP                                  dzg2A,dzg2B,dzaA,dzaB,dz_harm, &
   !$OMP                                  drdy,mag_grad2,Slope,slope2_Ratio_v,dzN2_v,N2_unlim, &
-  !$OMP                                  Sfn_unlim_v,Rho_avg,drdj_v,drdkDe_v,dz_harm,c2_dz_v, &
+  !$OMP                                  Sfn_unlim_v,Rho_avg,drdj_v,drdkDe_v,c2_dz_v, &
   !$OMP                                  Sfn_safe,Sfn_est,Sfn_in_h,calc_derivatives)
   do J=js-1,je
     do K=nz,2,-1

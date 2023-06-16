@@ -131,13 +131,14 @@ subroutine set_int_tide_input(u, v, h, tv, fluxes, itide, dt, G, GV, US, CS)
 
   avg_enabled = query_averaging_enabled(CS%diag, time_end=time_end)
 
-  !$OMP parallel do default(shared)
   if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+    !$OMP parallel do default(shared)
     do j=js,je ; do i=is,ie
       itide%Nb(i,j) = G%mask2dT(i,j) * sqrt(N2_bot(i,j))
       itide%TKE_itidal_input(i,j) = min(GV%Z_to_H*CS%TKE_itidal_coef(i,j)*itide%Nb(i,j), CS%TKE_itide_max)
     enddo ; enddo
   else
+    !$OMP parallel do default(shared)
     do j=js,je ; do i=is,ie
       itide%Nb(i,j) = G%mask2dT(i,j) * sqrt(N2_bot(i,j))
       itide%Rho_bot(i,j) = G%mask2dT(i,j) * Rho_bot(i,j)
@@ -235,7 +236,7 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot, rho_bo
   enddo
 
   !$OMP parallel do default(none) shared(is,ie,js,je,nz,tv,fluxes,G,GV,US,h,T_f,S_f, &
-  !$OMP                                  h2,N2_bot,G_Rho0,EOSdom) &
+  !$OMP                                  h2,N2_bot,rho_bot,G_Rho0,EOSdom) &
   !$OMP                          private(pres,Temp_Int,Salin_Int,dRho_dT,dRho_dS, &
   !$OMP                                  dz,hb,dRho_bot,z_from_bot,do_i,h_amp,do_any,dz_int) &
   !$OMP                     firstprivate(dRho_int)

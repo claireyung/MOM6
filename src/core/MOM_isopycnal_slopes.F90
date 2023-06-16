@@ -394,7 +394,7 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
       call calculate_density_derivs(T_v, S_v, pres_v, drho_dT_v, drho_dS_v, &
                                     tv%eqn_of_state, EOSdom_v)
 
-      if ((present_N2_u) .or. (present(dzSxN))) then
+      if ((present_N2_v) .or. (present(dzSyN))) then
         if (allocated(tv%SpV_avg)) then
           do i=is,ie
             GxSpV_v(i) = GV%g_Earth *  0.25* ((tv%SpV_avg(i,j,k) + tv%SpV_avg(i,j+1,k)) + &
