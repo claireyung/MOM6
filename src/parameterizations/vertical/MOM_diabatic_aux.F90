@@ -693,10 +693,12 @@ subroutine diagnoseMLDbyDensityDifference(id_MLD, h, tv, densityDiff, G, GV, US,
   real, dimension(SZI_(G)) :: deltaRhoAtKm1, deltaRhoAtK ! Density differences [R ~> kg m-3].
   real, dimension(SZI_(G)) :: pRef_MLD, pRef_N2 ! Reference pressures [R L2 T-2 ~> Pa].
   real, dimension(SZI_(G)) :: H_subML, dH_N2    ! Summed thicknesses used in N2 calculation [H ~> m or kg m-2]
+  real, dimension(SZI_(G)) :: dZ_N2             ! Summed vertical distance used in N2 calculation [Z ~> m]
   real, dimension(SZI_(G)) :: T_subML, T_deeper ! Temperatures used in the N2 calculation [C ~> degC].
   real, dimension(SZI_(G)) :: S_subML, S_deeper ! Salinities used in the N2 calculation [S ~> ppt].
   real, dimension(SZI_(G)) :: rho_subML, rho_deeper ! Densities used in the N2 calculation [R ~> kg m-3].
-  real, dimension(SZI_(G)) :: dK, dKm1         ! Layer thicknesses [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZK_(GV)) :: dZ_2d   ! Layer thicknesses in depth units [Z ~> m]
+  real, dimension(SZI_(G)) :: dZ, dZm1         ! Layer thicknesses associated with interfaces [Z ~> m]
   real, dimension(SZI_(G)) :: rhoSurf          ! Density used in finding the mixed layer depth [R ~> kg m-3].
   real, dimension(SZI_(G), SZJ_(G)) :: MLD     ! Diagnosed mixed layer depth [Z ~> m].
   real, dimension(SZI_(G), SZJ_(G)) :: subMLN2 ! Diagnosed stratification below ML [T-2 ~> s-2].
@@ -705,7 +707,7 @@ subroutine diagnoseMLDbyDensityDifference(id_MLD, h, tv, densityDiff, G, GV, US,
                                                ! have been stored already.
   real :: gE_Rho0          ! The gravitational acceleration, sometimes divided by the Boussinesq
                            ! reference density [H T-2 R-1 ~> m4 s-2 kg-1 or m s-2].
-  real :: dH_subML         ! Depth below ML over which to diagnose stratification [H ~> m or kg m-2]
+  real :: dZ_sub_ML        ! Depth below ML over which to diagnose stratification [Z ~> m]
   real :: aFac             ! A nondimensional factor [nondim]
   real :: ddRho            ! A density difference [R ~> kg m-3]
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
@@ -717,7 +719,7 @@ subroutine diagnoseMLDbyDensityDifference(id_MLD, h, tv, densityDiff, G, GV, US,
   if (present(id_N2subML)) then
     if (present(dz_subML)) then
       id_N2 = id_N2subML
-      dH_subML = GV%Z_to_H*dz_subML
+      dZ_sub_ML = dz_subML
     else
       call MOM_error(FATAL, "When the diagnostic of the subML stratification is "//&
                 "requested by providing id_N2_subML to diagnoseMLDbyDensityDifference, "//&
@@ -732,22 +734,25 @@ subroutine diagnoseMLDbyDensityDifference(id_MLD, h, tv, densityDiff, G, GV, US,
   pRef_MLD(:) = 0.0
   EOSdom(:) = EOS_domain(G%HI)
   do j=js,je
-    do i=is,ie ; dK(i) = 0.5 * h(i,j,1) ; enddo ! Depth of center of surface layer
+    ! Find the vertical distances across layers.
+    call thickness_to_dz(h, tv, dZ_2d, j, G, GV)
+
+    do i=is,ie ; dZ(i) = 0.5 * dZ_2d(i,1) ; enddo ! Depth of center of surface layer
     call calculate_density(tv%T(:,j,1), tv%S(:,j,1), pRef_MLD, rhoSurf, tv%eqn_of_state, EOSdom)
     do i=is,ie
       deltaRhoAtK(i) = 0.
       MLD(i,j) = 0.
       if (id_N2>0) then
         subMLN2(i,j) = 0.0
-        H_subML(i) = h(i,j,1) ; dH_N2(i) = 0.0
+        H_subML(i) = h(i,j,1) ; dH_N2(i) = 0.0 ; dZ_N2(i) = 0.0
         T_subML(i) = 0.0  ; S_subML(i) = 0.0 ; T_deeper(i) = 0.0 ; S_deeper(i) = 0.0
         N2_region_set(i) = (G%mask2dT(i,j)<0.5) ! Only need to work on ocean points.
       endif
     enddo
     do k=2,nz
       do i=is,ie
-        dKm1(i) = dK(i) ! Depth of center of layer K-1
-        dK(i) = dK(i) + 0.5 * ( h(i,j,k) + h(i,j,k-1) ) ! Depth of center of layer K
+        dZm1(i) = dZ(i) ! Depth of center of layer K-1
+        dZ(i) = dZ(i) + 0.5 * ( dZ_2d(i,k) + dZ_2d(i,k-1) ) ! Depth of center of layer K
       enddo
 
       ! Prepare to calculate stratification, N2, immediately below the mixed layer by finding
@@ -757,15 +762,18 @@ subroutine diagnoseMLDbyDensityDifference(id_MLD, h, tv, densityDiff, G, GV, US,
           if (MLD(i,j) == 0.0) then  ! Still in the mixed layer.
             H_subML(i) = H_subML(i) + h(i,j,k)
           elseif (.not.N2_region_set(i)) then ! This block is below the mixed layer, but N2 has not been found yet.
-            if (dH_N2(i) == 0.0) then ! Record the temperature, salinity, pressure, immediately below the ML
+            if (dZ_N2(i) == 0.0) then ! Record the temperature, salinity, pressure, immediately below the ML
               T_subML(i) = tv%T(i,j,k) ; S_subML(i) = tv%S(i,j,k)
               H_subML(i) = H_subML(i) + 0.5 * h(i,j,k) ! Start midway through this layer.
               dH_N2(i) = 0.5 * h(i,j,k)
-            elseif (dH_N2(i) + h(i,j,k) < dH_subML) then
+              dZ_N2(i) = 0.5 * dz_2d(i,k)
+            elseif (dZ_N2(i) + dZ_2d(i,k) < dZ_sub_ML) then
               dH_N2(i) = dH_N2(i) + h(i,j,k)
+              dZ_N2(i) = dZ_N2(i) + dz_2d(i,k)
             else  ! This layer includes the base of the region where N2 is calculated.
               T_deeper(i) = tv%T(i,j,k) ; S_deeper(i) = tv%S(i,j,k)
               dH_N2(i) = dH_N2(i) + 0.5 * h(i,j,k)
+              dZ_N2(i) = dZ_N2(i) + 0.5 * dz_2d(i,k)
               N2_region_set(i) = .true.
             endif
           endif
@@ -781,18 +789,18 @@ subroutine diagnoseMLDbyDensityDifference(id_MLD, h, tv, densityDiff, G, GV, US,
         if ((MLD(i,j) == 0.) .and. (ddRho > 0.) .and. &
             (deltaRhoAtKm1(i) < densityDiff) .and. (deltaRhoAtK(i) >= densityDiff)) then
           aFac = ( densityDiff - deltaRhoAtKm1(i) ) / ddRho
-          MLD(i,j) = GV%H_to_Z*(dK(i) * aFac + dKm1(i) * (1. - aFac))
+          MLD(i,j) = (dZ(i) * aFac + dZm1(i) * (1. - aFac))
         endif
         if (id_SQ > 0) MLD2(i,j) = MLD(i,j)**2
       enddo ! i-loop
     enddo ! k-loop
     do i=is,ie
-      if ((MLD(i,j) == 0.) .and. (deltaRhoAtK(i) < densityDiff)) MLD(i,j) = GV%H_to_Z*dK(i) ! Mixing goes to the bottom
+      if ((MLD(i,j) == 0.) .and. (deltaRhoAtK(i) < densityDiff)) MLD(i,j) = dZ(i) ! Mixing goes to the bottom
     enddo
 
     if (id_N2>0) then  ! Now actually calculate stratification, N2, below the mixed layer.
       do i=is,ie ; pRef_N2(i) = (GV%g_Earth * GV%H_to_RZ) * (H_subML(i) + 0.5*dH_N2(i)) ; enddo
-      ! if ((.not.N2_region_set(i)) .and. (dH_N2(i) > 0.5*dH_subML)) then
+      ! if ((.not.N2_region_set(i)) .and. (dZ_N2(i) > 0.5*dZ_sub_ML)) then
       !    ! Use whatever stratification we can, measured over whatever distance is available?
       !    T_deeper(i) = tv%T(i,j,nz) ; S_deeper(i) = tv%S(i,j,nz)
       !    N2_region_set(i) = .true.
