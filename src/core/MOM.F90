@@ -337,14 +337,14 @@ type, public :: MOM_control_struct ; private
   ! These elements are used to control the calculation and error checking of the surface state
   real :: Hmix                  !< Diagnostic mixed layer thickness over which to
                                 !! average surface tracer properties when a bulk
-                                !! mixed layer is not used [Z ~> m], or a negative value
+                                !! mixed layer is not used [H ~> m or kg m-2], or a negative value
                                 !! if a bulk mixed layer is being used.
   real :: HFrz                  !< If HFrz > 0, the nominal depth over which melt potential is computed
-                                !! [Z ~> m].  The actual depth over which melt potential is
+                                !! [H ~> m or kg m-2].  The actual depth over which melt potential is
                                 !! computed is min(HFrz, OBLD), where OBLD is the boundary layer depth.
                                 !! If HFrz <= 0 (default), melt potential will not be computed.
   real :: Hmix_UV               !< Depth scale over which to average surface flow to
-                                !! feedback to the coupler/driver [Z ~> m] when
+                                !! feedback to the coupler/driver [H ~> m or kg m-2] when
                                 !! bulk mixed layer is not used, or a negative value
                                 !! if a bulk mixed layer is being used.
   logical :: check_bad_sfc_vals !< If true, scan surface state for ridiculous values.
@@ -1964,6 +1964,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   logical, allocatable, dimension(:,:,:) :: PCM_cell ! If true, PCM remapping should be used in a cell.
   type(group_pass_type) :: tmp_pass_uv_T_S_h, pass_uv_T_S_h
 
+  real    :: Hmix_z, Hmix_UV_z ! Temporary variables with averaging depths [Z ~> m]
+  real    :: HFrz_z            ! Temporary variable with the melt potential depth [Z ~> m]
   real    :: default_val       ! default value for a parameter
   logical :: write_geom_files  ! If true, write out the grid geometry files.
   logical :: new_sim           ! If true, this has been determined to be a new simulation
@@ -2200,18 +2202,18 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   if (bulkmixedlayer) then
     CS%Hmix = -1.0 ; CS%Hmix_UV = -1.0
   else
-    call get_param(param_file, "MOM", "HMIX_SFC_PROP", CS%Hmix, &
+    call get_param(param_file, "MOM", "HMIX_SFC_PROP", Hmix_z, &
                  "If BULKMIXEDLAYER is false, HMIX_SFC_PROP is the depth "//&
                  "over which to average to find surface properties like "//&
                  "SST and SSS or density (but not surface velocities).", &
                  units="m", default=1.0, scale=US%m_to_Z)
-    call get_param(param_file, "MOM", "HMIX_UV_SFC_PROP", CS%Hmix_UV, &
+    call get_param(param_file, "MOM", "HMIX_UV_SFC_PROP", Hmix_UV_z, &
                  "If BULKMIXEDLAYER is false, HMIX_UV_SFC_PROP is the depth "//&
                  "over which to average to find surface flow properties, "//&
                  "SSU, SSV. A non-positive value indicates no averaging.", &
                  units="m", default=0.0, scale=US%m_to_Z)
   endif
-  call get_param(param_file, "MOM", "HFREEZE", CS%HFrz, &
+  call get_param(param_file, "MOM", "HFREEZE", HFrz_z, &
                  "If HFREEZE > 0, melt potential will be computed. The actual depth "//&
                  "over which melt potential is computed will be min(HFREEZE, OBLD), "//&
                  "where OBLD is the boundary layer depth. If HFREEZE <= 0 (default), "//&
@@ -2499,6 +2501,15 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
 
   call verticalGridInit( param_file, CS%GV, US )
   GV => CS%GV
+
+  ! Now that the vertical grid has been initialized, rescale parameters that depend on factors
+  ! that are set with the vertical grid to their desired units.  This added rescaling step would
+  ! be unnecessary if the vertical grid were initialized earlier in this routine.
+  if (.not.bulkmixedlayer) then
+    CS%Hmix = (US%Z_to_m * GV%m_to_H) * Hmix_z
+    CS%Hmix_UV = (US%Z_to_m * GV%m_to_H) * Hmix_UV_z
+  endif
+  CS%HFrz = (US%Z_to_m * GV%m_to_H) * HFrz_z
 
   !   Shift from using the temporary dynamic grid type to using the final (potentially static)
   ! and properly rotated ocean-specific grid type and horizontal index type.
@@ -3545,9 +3556,12 @@ subroutine extract_surface_state(CS, sfc_state_in)
     enddo ; enddo
 
   else  ! (CS%Hmix >= 0.0)
-    H_rescale = 1.0 ; if (CS%answer_date < 20190101) H_rescale = GV%H_to_Z
+    H_rescale = 1.0
     depth_ml = CS%Hmix
-    if (CS%answer_date >= 20190101) depth_ml = CS%Hmix*GV%Z_to_H
+    if (CS%answer_date < 20190101) then
+      H_rescale = GV%H_to_Z
+      depth_ml = GV%H_to_Z*CS%Hmix
+    endif
     ! Determine the mean tracer properties of the uppermost depth_ml fluid.
 
     !$OMP parallel do default(shared) private(depth,dh)
@@ -3618,7 +3632,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
     !       This assumes that u and v halos have already been updated.
     if (CS%Hmix_UV>0.) then
       depth_ml = CS%Hmix_UV
-      if (CS%answer_date >= 20190101) depth_ml = CS%Hmix_UV*GV%Z_to_H
+      if (CS%answer_date < 20190101) depth_ml = GV%H_to_Z*CS%Hmix_UV
       !$OMP parallel do default(shared) private(depth,dh,hv)
       do J=js-1,ie
         do i=is,ie
@@ -3692,7 +3706,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
       do k=1,nz
         call calculate_TFreeze(CS%tv%S(is:ie,j,k), pres(is:ie), T_freeze(is:ie), CS%tv%eqn_of_state)
         do i=is,ie
-          depth_ml = GV%Z_to_H*min(CS%HFrz, CS%visc%MLD(i,j))
+          depth_ml = min(CS%HFrz, (US%Z_to_m*GV%m_to_H)*CS%visc%MLD(i,j))
           if (depth(i) + h(i,j,k) < depth_ml) then
             dh = h(i,j,k)
           elseif (depth(i) < depth_ml) then
