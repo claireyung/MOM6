@@ -1115,6 +1115,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
     endif
 
     if (CS%interface_filter) then
+      if (allocated(CS%tv%SpV_avg)) call pass_var(CS%tv%SpV_avg, G%Domain, clock=id_clock_pass)
       call cpu_clock_begin(id_clock_int_filter)
       call interface_filter(h, CS%uhtr, CS%vhtr, CS%tv, dt_thermo, G, GV, US, &
                             CS%CDp, CS%interface_filter_CSp)
@@ -1250,6 +1251,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
     endif
 
     if (CS%interface_filter) then
+      if (allocated(CS%tv%SpV_avg)) call pass_var(CS%tv%SpV_avg, G%Domain, clock=id_clock_pass)
       call cpu_clock_begin(id_clock_int_filter)
       call interface_filter(h, CS%uhtr, CS%vhtr, CS%tv, dt_thermo, G, GV, US, &
                             CS%CDp, CS%interface_filter_CSp)
