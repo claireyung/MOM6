@@ -157,8 +157,9 @@ type, public :: tidal_mixing_cs ; private
   ! Data containers
   real, allocatable :: TKE_Niku(:,:)    !< Lee wave driven Turbulent Kinetic Energy input
                                         !! [R Z3 T-3 ~> W m-2]
-  real, allocatable :: TKE_itidal(:,:)  !< The internal Turbulent Kinetic Energy input divided
-                                        !! by the bottom stratification [R Z3 T-2 ~> J m-2].
+  real, allocatable :: TKE_itidal(:,:)  !< The internal Turbulent Kinetic Energy input divided by
+                                        !! the bottom stratification and in non-Boussinesq mode by
+                                        !! the near-bottom density [R Z4 H-1 T-2 ~> J m-2 or J m kg-1]
   real, allocatable :: Nb(:,:)          !< The near bottom buoyancy frequency [T-1 ~> s-1].
   real, allocatable :: mask_itidal(:,:) !< A mask of where internal tide energy is input [nondim]
   real, allocatable :: h2(:,:)          !< Squared bottom depth variance [Z2 ~> m2].
@@ -547,8 +548,8 @@ logical function tidal_mixing_init(Time, G, GV, US, param_file, int_tide_CSp, di
 
       utide = CS%tideamp(i,j)
       ! Compute the fixed part of internal tidal forcing.
-      ! The units here are [R Z3 T-2 ~> J m-2 = kg s-2] here.
-      CS%TKE_itidal(i,j) = 0.5 * CS%kappa_h2_factor * GV%Rho0 * &
+      ! The units here are [R Z4 H-1 T-2 ~> J m-2 or m3 s-2] here. (Note that J m-2 = kg s-2.)
+      CS%TKE_itidal(i,j) = 0.5 * CS%kappa_h2_factor * GV%H_to_RZ * &
            CS%kappa_itides * CS%h2(i,j) * utide*utide
     enddo ; enddo
 
@@ -721,7 +722,7 @@ end function tidal_mixing_init
 !> Depending on whether or not CVMix is active, calls the associated subroutine to compute internal
 !! tidal dissipation and to add the effect of internal-tide-driven mixing to the layer or interface
 !! diffusivities.
-subroutine calculate_tidal_mixing(dz, j, N2_bot, N2_lay, N2_int, TKE_to_Kd, max_TKE, &
+subroutine calculate_tidal_mixing(dz, j, N2_bot, Rho_bot, N2_lay, N2_int, TKE_to_Kd, max_TKE, &
                                   G, GV, US, CS, Kd_max, Kv, Kd_lay, Kd_int)
   type(ocean_grid_type),            intent(in)    :: G      !< The ocean's grid structure
   type(verticalGrid_type),          intent(in)    :: GV     !< The ocean's vertical grid structure
@@ -730,6 +731,7 @@ subroutine calculate_tidal_mixing(dz, j, N2_bot, N2_lay, N2_int, TKE_to_Kd, max_
   integer,                          intent(in)    :: j      !< The j-index to work on
   real, dimension(SZI_(G)),         intent(in)    :: N2_bot !< The near-bottom squared buoyancy
                                                             !! frequency [T-2 ~> s-2].
+  real, dimension(SZI_(G)),         intent(in)    :: Rho_bot !< The near-bottom in situ density [R ~> kg m-3]
   real, dimension(SZI_(G),SZK_(GV)), intent(in)   :: N2_lay !< The squared buoyancy frequency of the
                                                             !! layers [T-2 ~> s-2].
   real, dimension(SZI_(G),SZK_(GV)+1), intent(in) :: N2_int !< The squared buoyancy frequency at the
@@ -760,7 +762,7 @@ subroutine calculate_tidal_mixing(dz, j, N2_bot, N2_lay, N2_int, TKE_to_Kd, max_
     if (CS%use_CVMix_tidal) then
       call calculate_CVMix_tidal(dz, j, N2_int, G, GV, US, CS, Kv, Kd_lay, Kd_int)
     else
-      call add_int_tide_diffusivity(dz, j, N2_bot, N2_lay, TKE_to_Kd, max_TKE, &
+      call add_int_tide_diffusivity(dz, j, N2_bot, Rho_bot, N2_lay, TKE_to_Kd, max_TKE, &
                                     G, GV, US, CS, Kd_max, Kd_lay, Kd_int)
     endif
   endif
@@ -1017,7 +1019,7 @@ end subroutine calculate_CVMix_tidal
 !! low modes (rays) of the internal tide ("lowmode"), and (3) local dissipation of internal lee waves.
 !! Will eventually need to add diffusivity due to other wave-breaking processes (e.g. Bottom friction,
 !! Froude-number-depending breaking, PSI, etc.).
-subroutine add_int_tide_diffusivity(dz, j, N2_bot, N2_lay, TKE_to_Kd, max_TKE, &
+subroutine add_int_tide_diffusivity(dz, j, N2_bot, Rho_bot, N2_lay, TKE_to_Kd, max_TKE, &
                                     G, GV, US, CS, Kd_max, Kd_lay, Kd_int)
   type(ocean_grid_type),             intent(in)    :: G      !< The ocean's grid structure
   type(verticalGrid_type),           intent(in)    :: GV     !< The ocean's vertical grid structure
@@ -1026,6 +1028,7 @@ subroutine add_int_tide_diffusivity(dz, j, N2_bot, N2_lay, TKE_to_Kd, max_TKE, &
   integer,                           intent(in)    :: j      !< The j-index to work on
   real, dimension(SZI_(G)),          intent(in)    :: N2_bot !< The near-bottom squared buoyancy frequency
                                                              !! frequency [T-2 ~> s-2].
+  real, dimension(SZI_(G)),          intent(in)    :: Rho_bot !< The near-bottom in situ density [R ~> kg m-3]
   real, dimension(SZI_(G),SZK_(GV)), intent(in)    :: N2_lay !< The squared buoyancy frequency of the
                                                              !! layers [T-2 ~> s-2].
   real, dimension(SZI_(G),SZK_(GV)), intent(in)    :: TKE_to_Kd !< The conversion rate between the TKE
@@ -1251,7 +1254,12 @@ subroutine add_int_tide_diffusivity(dz, j, N2_bot, N2_lay, TKE_to_Kd, max_TKE, &
   ! Both Polzin and Simmons:
   do i=is,ie
     ! Dissipation of locally trapped internal tide (non-propagating high modes)
-   TKE_itidal_bot(i) = min(CS%TKE_itidal(i,j)*CS%Nb(i,j), CS%TKE_itide_max)
+    if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+      TKE_itidal_bot(i) = min(GV%Z_to_H*CS%TKE_itidal(i,j)*CS%Nb(i,j), CS%TKE_itide_max)
+    else
+      TKE_itidal_bot(i) = min(GV%RZ_to_H*Rho_bot(i) * (CS%TKE_itidal(i,j)*CS%Nb(i,j)), &
+                              CS%TKE_itide_max)
+    endif
     if (allocated(CS%dd%TKE_itidal_used)) &
       CS%dd%TKE_itidal_used(i,j) = TKE_itidal_bot(i)
     TKE_itidal_bot(i) = (GV%RZ_to_H * CS%Mu_itides * CS%Gamma_itides) * TKE_itidal_bot(i)
