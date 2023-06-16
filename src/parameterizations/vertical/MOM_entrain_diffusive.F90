@@ -290,9 +290,15 @@ subroutine entrainment_diffusive(h, tv, fluxes, dt, G, GV, US, CS, ea, eb, &
     do i=is,ie ; ds_dsp1(i,nz) = 0.0 ; enddo
     do i=is,ie ; dsp1_ds(i,nz) = 0.0 ; enddo
 
-    do k=2,nz-1 ; do i=is,ie
-      ds_dsp1(i,k) = GV%g_prime(k) / GV%g_prime(k+1)
-    enddo ; enddo
+    if (GV%Boussinesq .or. GV%Semi_Boussinesq) then
+      do k=2,nz-1 ; do i=is,ie
+        ds_dsp1(i,k) = GV%g_prime(k) / GV%g_prime(k+1)
+      enddo ; enddo
+    else  ! Use a mathematically equivalent form that avoids any dependency on RHO_0.
+      do k=2,nz-1 ; do i=is,ie
+        ds_dsp1(i,k) = (GV%Rlay(k) - GV%Rlay(k-1)) / (GV%Rlay(k+1) - GV%Rlay(k))
+      enddo ; enddo
+    endif
 
     if (CS%bulkmixedlayer) then
       !   This subroutine determines the averaged entrainment across each

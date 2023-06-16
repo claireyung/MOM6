@@ -715,6 +715,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
                       ! entraining all fluid in the layers above or below [H ~> m or kg m-2]
   real :: dRho_lay    ! density change across a layer [R ~> kg m-3]
   real :: Omega2      ! rotation rate squared [T-2 ~> s-2]
+  real :: grav        ! Gravitational acceleration [Z T-1 ~> m s-2]
   real :: G_Rho0      ! Gravitational acceleration divided by Boussinesq reference density
                       ! [Z R-1 T-2 ~> m4 s-2 kg-1]
   real :: G_IRho0     ! Alternate calculation of G_Rho0 with thickness rescaling factors
@@ -731,9 +732,10 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
   I_dt      = 1.0 / dt
   Omega2    = CS%omega**2
   dz_neglect = GV%dZ_subroundoff
-  G_Rho0    = (US%L_to_Z**2 * GV%g_Earth) / GV%Rho0
+  grav = (US%L_to_Z**2 * GV%g_Earth)
+  G_Rho0 = grav / GV%Rho0
   if (CS%answer_date < 20190101) then
-    G_IRho0 = (US%L_to_Z**2 * GV%g_Earth) * GV%H_to_Z**2 * GV%RZ_to_H
+    G_IRho0 = grav * GV%H_to_Z**2 * GV%RZ_to_H
   else
     G_IRho0 = GV%H_to_Z*G_Rho0
   endif
@@ -865,13 +867,21 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
       ! dRho_int should already be non-negative, so the max is redundant?
       dh_max = maxEnt(i,k) * (1.0 + dsp1_ds(i,k))
       dRho_lay = 0.5 * max(dRho_int(i,K) + dRho_int(i,K+1), 0.0)
-      maxTKE(i,k) = I_dt * (G_IRho0 * &
-          (0.5*max(dRho_int(i,K+1) + dsp1_ds(i,k)*dRho_int(i,K), 0.0))) * &
-           ((h(i,j,k) + dh_max) * maxEnt(i,k))
+
       ! TKE_to_Kd should be rho_InSitu / G_Earth * (delta rho_InSitu)
       ! The omega^2 term in TKE_to_Kd is due to a rescaling of the efficiency of turbulent
       ! mixing by a factor of N^2 / (N^2 + Omega^2), as proposed by Melet et al., 2013?
-      TKE_to_Kd(i,k) = 1.0 / (G_Rho0 * dRho_lay + CS%omega**2 * (dz(i,k) + dz_neglect))
+      if (allocated(tv%SpV_avg)) then
+        maxTKE(i,k) = I_dt * ((GV%H_to_RZ * grav * tv%SpV_avg(i,j,k)**2) * &
+            (0.5*max(dRho_int(i,K+1) + dsp1_ds(i,k)*dRho_int(i,K), 0.0))) * &
+             ((h(i,j,k) + dh_max) * maxEnt(i,k))
+        TKE_to_Kd(i,k) = 1.0 / (grav * tv%SpV_avg(i,j,k) * dRho_lay + CS%omega**2 * (dz(i,k) + dz_neglect))
+      else
+        maxTKE(i,k) = I_dt * (G_IRho0 * &
+            (0.5*max(dRho_int(i,K+1) + dsp1_ds(i,k)*dRho_int(i,K), 0.0))) * &
+             ((h(i,j,k) + dh_max) * maxEnt(i,k))
+        TKE_to_Kd(i,k) = 1.0 / (G_Rho0 * dRho_lay + CS%omega**2 * (dz(i,k) + dz_neglect))
+      endif
     endif
   enddo ; enddo
 
@@ -1942,7 +1952,8 @@ subroutine set_density_ratios(h, tv, kb, G, GV, US, CS, j, ds_dsp1, rho_0)
   real :: a(SZK_(GV)), a_0(SZK_(GV)) ! nondimensional temporary variables [nondim]
   real :: p_ref(SZI_(G))           ! an array of tv%P_Ref pressures [R L2 T-2 ~> Pa]
   real :: Rcv(SZI_(G),SZK_(GV))    ! coordinate density in the mixed and buffer layers [R ~> kg m-3]
-  real :: I_Drho                   ! temporary variable [R-1 ~> m3 kg-1]
+  real :: I_Drho                   ! The inverse of the coordinate density difference between
+                                   ! layers [R-1 ~> m3 kg-1]
 
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: i, k, k3, is, ie, nz, kmb
@@ -1950,9 +1961,15 @@ subroutine set_density_ratios(h, tv, kb, G, GV, US, CS, j, ds_dsp1, rho_0)
 
   do k=2,nz-1
     if (GV%g_prime(k+1) /= 0.0) then
-      do i=is,ie
-        ds_dsp1(i,k) = GV%g_prime(k) / GV%g_prime(k+1)
-      enddo
+      if (GV%Boussinesq .or. GV%Semi_Boussinesq) then
+        do i=is,ie
+          ds_dsp1(i,k) = GV%g_prime(k) / GV%g_prime(k+1)
+        enddo
+      else  ! Use a mathematically equivalent form that avoids any dependency on RHO_0.
+        do i=is,ie
+          ds_dsp1(i,k) = (GV%Rlay(k) - GV%Rlay(k-1)) / (GV%Rlay(k+1) - GV%Rlay(k))
+        enddo
+      endif
     else
       do i=is,ie
         ds_dsp1(i,k) = 1.
@@ -1975,7 +1992,11 @@ subroutine set_density_ratios(h, tv, kb, G, GV, US, CS, j, ds_dsp1, rho_0)
 ! interfaces above and below the buffer layer and the next denser layer.
         k = kb(i)
 
-        I_Drho = g_R0 / GV%g_prime(k+1)
+        if (GV%Boussinesq .or. GV%Semi_Boussinesq) then
+          I_Drho = g_R0 / GV%g_prime(k+1)
+        else
+          I_Drho = 1.0 / (GV%Rlay(k+1) - GV%Rlay(k))
+        endif
         ! The indexing convention for a is appropriate for the interfaces.
         do k3=1,kmb
           a(k3+1) = (GV%Rlay(k) - Rcv(i,k3)) * I_Drho
