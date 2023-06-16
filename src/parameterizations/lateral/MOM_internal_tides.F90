@@ -77,8 +77,9 @@ type, public :: int_tide_CS ; private
                         !< energy lost due to wave breaking [R Z3 T-3 ~> W m-2]
   real, allocatable, dimension(:,:) :: TKE_itidal_loss_fixed
                         !< Fixed part of the energy lost due to small-scale drag [R Z3 L-2 ~> kg m-2] here;
-                        !! This will be multiplied by N and the squared near-bottom velocity to get
-                        !! the energy losses in [R Z3 T-3 ~> W m-2]
+                        !! This will be multiplied by N and the squared near-bottom velocity (and by
+                        !! the near-bottom density in non-Boussinesq mode) to get the energy losses
+                        !! in [R Z4 H-1 L-2 ~> kg m-2 or m]
   real, allocatable, dimension(:,:,:,:,:) :: TKE_itidal_loss
                         !< energy lost due to small-scale wave drag [R Z3 T-3 ~> W m-2]
   real, allocatable, dimension(:,:,:,:,:) :: TKE_residual_loss
@@ -163,7 +164,7 @@ contains
 
 !> Calls subroutines in this file that are needed to refract, propagate,
 !! and dissipate energy density of the internal tide.
-subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
+subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, Rho_bot, dt, &
                               G, GV, US, CS)
   type(ocean_grid_type),            intent(inout) :: G  !< The ocean's grid structure.
   type(verticalGrid_type),          intent(in)    :: GV !< The ocean's vertical grid structure.
@@ -177,6 +178,8 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: vel_btTide !< Barotropic velocity read
                                                         !! from file [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: Nb !< Near-bottom buoyancy frequency [T-1 ~> s-1].
+  real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: Rho_bot !< Near-bottom density or the Boussinesq
+                                                        !! reference density [R ~> kg m-3].
   real,                             intent(in)    :: dt !< Length of time over which to advance
                                                         !! the internal tides [T ~> s].
   type(int_tide_CS),                intent(inout) :: CS !< Internal tide control structure
@@ -203,6 +206,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   real :: f2       ! The squared Coriolis parameter interpolated to a tracer point [T-2 ~> s-2]
   real :: Kmag2    ! A squared horizontal wavenumber [L-2 ~> m-2]
   real :: I_D_here ! The inverse of the local water column thickness [H-1 ~> m-1 or m2 kg-1]
+  real :: I_mass   ! The inverse of the local water mass [R-1 Z-1 ~> m2 kg-1]
   real :: freq2    ! The frequency squared [T-2 ~> s-2]
   real :: c_phase  ! The phase speed [L T-1 ~> m s-1]
   real :: loss_rate  ! An energy loss rate [T-1 ~> s-1]
@@ -383,11 +387,20 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
     do k=1,GV%ke ; do j=jsd,jed ; do i=isd,ied
       htot(i,j) = htot(i,j) + h(i,j,k)
     enddo ; enddo ; enddo
-    do j=jsd,jed ; do i=isd,ied
-      I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
-      drag_scale(i,j) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*vel_btTide(i,j)**2 + &
-                        tot_En(i,j) * GV%RZ_to_H * I_D_here)) * GV%Z_to_H*I_D_here
-    enddo ; enddo
+    if (GV%Boussinesq) then
+      ! This is mathematically equivalent to the form in the option below, but they differ at roundoff.
+      do j=jsd,jed ; do i=isd,ied
+        I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
+        drag_scale(i,j) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*vel_btTide(i,j)**2 + &
+                          tot_En(i,j) * GV%RZ_to_H * I_D_here)) * GV%Z_to_H*I_D_here
+      enddo ; enddo
+    else
+      do j=jsd,jed ; do i=isd,ied
+        I_mass = GV%RZ_to_H / (max(htot(i,j), CS%drag_min_depth))
+        drag_scale(i,j) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
+                          sqrt(max(0.0, US%L_to_Z**2*vel_btTide(i,j)**2 + tot_En(i,j) * I_mass))
+      enddo ; enddo
+    endif
     do m=1,CS%nMode ; do fr=1,CS%nFreq ; do a=1,CS%nAngle ; do j=jsd,jed ; do i=isd,ied
       ! Calculate loss rate and apply loss over the time step ; apply the same drag timescale
       ! to each En component (technically not correct; fix later)
@@ -430,7 +443,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   ! Finally, apply loss
   if (CS%apply_wave_drag) then
     ! Calculate loss rate and apply loss over the time step
-    call itidal_lowmode_loss(G, US, CS, Nb, Ub, CS%En, CS%TKE_itidal_loss_fixed, &
+    call itidal_lowmode_loss(G, GV, US, CS, Nb, Rho_bot, Ub, CS%En, CS%TKE_itidal_loss_fixed, &
                              CS%TKE_itidal_loss, dt, full_halos=.false.)
   endif
   ! Check for En<0 - for debugging, delete later
@@ -685,18 +698,21 @@ end subroutine sum_En
 
 !> Calculates the energy lost from the propagating internal tide due to
 !! scattering over small-scale roughness along the lines of Jayne & St. Laurent (2001).
-subroutine itidal_lowmode_loss(G, US, CS, Nb, Ub, En, TKE_loss_fixed, TKE_loss, dt, full_halos)
+subroutine itidal_lowmode_loss(G, GV, US, CS, Nb, Rho_bot, Ub, En, TKE_loss_fixed, TKE_loss, dt, full_halos)
   type(ocean_grid_type),     intent(in)    :: G  !< The ocean's grid structure.
+  type(verticalGrid_type),   intent(in)    :: GV !< The ocean's vertical grid structure.
   type(unit_scale_type),     intent(in)    :: US !< A dimensional unit scaling type
   type(int_tide_CS),         intent(in)    :: CS !< Internal tide control structure
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
                              intent(in)    :: Nb !< Near-bottom stratification [T-1 ~> s-1].
+  real, dimension(G%isd:G%ied,G%jsd:G%jed), &
+                             intent(in)    :: Rho_bot !< Near-bottom density [R ~> kg m-3].
   real, dimension(G%isd:G%ied,G%jsd:G%jed,CS%nFreq,CS%nMode), &
                              intent(inout) :: Ub !< RMS (over one period) near-bottom horizontal
                                                  !! mode velocity [L T-1 ~> m s-1].
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                             intent(in) :: TKE_loss_fixed !< Fixed part of energy loss [R Z3 L-2 ~> kg m-2]
-                                                 !! (rho*kappa*h^2).
+                             intent(in) :: TKE_loss_fixed !< Fixed part of energy loss [R Z4 H-1 L-2 ~> kg m-2 or m]
+                                                 !! (rho*kappa*h^2) or (kappa*h^2).
   real, dimension(G%isd:G%ied,G%jsd:G%jed,CS%NAngle,CS%nFreq,CS%nMode), &
                              intent(inout) :: En !< Energy density of the internal waves [R Z3 T-2 ~> J m-2].
   real, dimension(G%isd:G%ied,G%jsd:G%jed,CS%NAngle,CS%nFreq,CS%nMode), &
@@ -733,14 +749,18 @@ subroutine itidal_lowmode_loss(G, US, CS, Nb, Ub, En, TKE_loss_fixed, TKE_loss, 
     enddo
 
     ! Calculate TKE loss rate; units of [R Z3 T-3 ~> W m-2] here.
-    TKE_loss_tot = q_itides * TKE_loss_fixed(i,j) * Nb(i,j) * Ub(i,j,fr,m)**2
+    if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+      TKE_loss_tot = q_itides * GV%Z_to_H * TKE_loss_fixed(i,j) * Nb(i,j) * Ub(i,j,fr,m)**2
+    else
+      TKE_loss_tot = q_itides * (GV%RZ_to_H * Rho_bot(i,j)) * TKE_loss_fixed(i,j) * Nb(i,j) * Ub(i,j,fr,m)**2
+    endif
 
     ! Update energy remaining (this is a pseudo implicit calc)
     ! (E(t+1)-E(t))/dt = -TKE_loss(E(t+1)/E(t)), which goes to zero as E(t+1) goes to zero
     if (En_tot > 0.0) then
       do a=1,CS%nAngle
         frac_per_sector = En(i,j,a,fr,m)/En_tot
-        TKE_loss(i,j,a,fr,m) = frac_per_sector*TKE_loss_tot           ! Wm-2
+        TKE_loss(i,j,a,fr,m) = frac_per_sector*TKE_loss_tot           ! [R Z3 T-3  ~> W m-2]
         loss_rate = TKE_loss(i,j,a,fr,m) / (En(i,j,a,fr,m) + En_negl) ! [T-1 ~> s-1]
         En(i,j,a,fr,m) = En(i,j,a,fr,m) / (1.0 + dt*loss_rate)
       enddo
@@ -2428,9 +2448,10 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     else
       h2(i,j) = max(h2(i,j), 0.0)
     endif
-    ! Compute the fixed part; units are [R Z3 L-2 ~> kg m-2] here
-    ! will be multiplied by N and the squared near-bottom velocity to get into [R Z3 T-3 ~> W m-2]
-    CS%TKE_itidal_loss_fixed(i,j) = 0.5*kappa_h2_factor*GV%Rho0 * US%L_to_Z*kappa_itides * h2(i,j)
+    ! Compute the fixed part; units are [R Z4 H-1 L-2 ~> kg m-2 or m] here
+    ! will be multiplied by N and the squared near-bottom velocity (and by the
+    ! near-bottom density in non-Boussinesq mode) to get into [R Z3 T-3 ~> W m-2]
+    CS%TKE_itidal_loss_fixed(i,j) = 0.5*kappa_h2_factor* GV%H_to_RZ * US%L_to_Z*kappa_itides * h2(i,j)
   enddo ; enddo
 
   deallocate(h2)
