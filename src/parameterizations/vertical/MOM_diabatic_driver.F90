@@ -396,7 +396,10 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
     if (CS%uniform_test_cg > 0.0) then
       do m=1,CS%nMode ; cn_IGW(:,:,m) = CS%uniform_test_cg ; enddo
     else
-      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed, full_halos=.true.)
+      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed, CS%int_tide%w_struct, &
+                       CS%int_tide%u_struct, CS%int_tide%u_struct_max, CS%int_tide%u_struct_bot, &
+                       CS%int_tide_input%Nb, CS%int_tide%int_w2, CS%int_tide%int_U2, CS%int_tide%int_N2w2, &
+                       full_halos=.true.)
     endif
 
     call propagate_int_tide(h, tv, cn_IGW, CS%int_tide_input%TKE_itidal_input, CS%int_tide_input%tideamp, &
@@ -713,6 +716,10 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
       ! If visc%MLD exists, copy KPP's BLD into it
       if (associated(visc%MLD)) visc%MLD(:,:) = Hml(:,:)
     endif
+    if (associated(visc%sfc_buoy_flx)) then
+      visc%sfc_buoy_flx(:,:) = CS%KPP_buoy_flux(:,:,1)
+      call pass_var(visc%sfc_buoy_flx, G%domain, halo=1)
+    endif
 
     if (.not.CS%KPPisPassive) then
       !$OMP parallel do default(shared)
@@ -857,6 +864,10 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     elseif (associated(visc%MLD)) then
       call energetic_PBL_get_MLD(CS%ePBL, visc%MLD, G, US)
       call pass_var(visc%MLD, G%domain, halo=1)
+    endif
+    if (associated(visc%sfc_buoy_flx)) then
+      visc%sfc_buoy_flx(:,:) = SkinBuoyFlux(:,:)
+      call pass_var(visc%sfc_buoy_flx, G%domain, halo=1)
     endif
 
     ! Find the vertical distances across layers, which may have been modified by the net surface flux
@@ -1317,6 +1328,10 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
       ! If visc%MLD exists, copy KPP's BLD into it
       if (associated(visc%MLD)) visc%MLD(:,:) = Hml(:,:)
     endif
+    if (associated(visc%sfc_buoy_flx)) then
+      visc%sfc_buoy_flx(:,:) = CS%KPP_buoy_flux(:,:,1)
+      call pass_var(visc%sfc_buoy_flx, G%domain, halo=1)
+    endif
 
     if (showCallTree) call callTree_waypoint("done with KPP_calculate (diabatic)")
     if (CS%debug) then
@@ -1401,6 +1416,10 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
     elseif (associated(visc%MLD)) then
       call energetic_PBL_get_MLD(CS%ePBL, visc%MLD, G, US)
       call pass_var(visc%MLD, G%domain, halo=1)
+    endif
+    if (associated(visc%sfc_buoy_flx)) then
+      visc%sfc_buoy_flx(:,:) = SkinBuoyFlux(:,:)
+      call pass_var(visc%sfc_buoy_flx, G%domain, halo=1)
     endif
 
     ! Augment the diffusivities and viscosity due to those diagnosed in energetic_PBL.
@@ -1925,6 +1944,10 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
       call pass_var(Hml, G%domain, halo=1)
       ! If visc%MLD exists, copy KPP's BLD into it
       if (associated(visc%MLD)) visc%MLD(:,:) = Hml(:,:)
+    endif
+    if (associated(visc%sfc_buoy_flx)) then
+      visc%sfc_buoy_flx(:,:) = CS%KPP_buoy_flux(:,:,1)
+      call pass_var(visc%sfc_buoy_flx, G%domain, halo=1)
     endif
 
     if (.not. CS%KPPisPassive) then

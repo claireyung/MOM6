@@ -2100,7 +2100,7 @@ subroutine set_visc_register_restarts(HI, GV, US, param_file, visc, restart_CS)
   ! Local variables
   logical :: use_kappa_shear, KS_at_vertex
   logical :: adiabatic, useKPP, useEPBL
-  logical :: use_CVMix_shear, MLE_use_PBL_MLD, use_CVMix_conv
+  logical :: use_CVMix_shear, MLE_use_PBL_MLD, MLE_use_Bodner, use_CVMix_conv
   integer :: isd, ied, jsd, jed, nz
   real :: hfreeze !< If hfreeze > 0 [Z ~> m], melt potential will be computed.
   character(len=16)  :: Kv_units, Kd_units
@@ -2176,6 +2176,16 @@ subroutine set_visc_register_restarts(HI, GV, US, param_file, visc, restart_CS)
   if (MLE_use_PBL_MLD) then
     call register_restart_field(visc%MLD, "MLD", .false., restart_CS, &
                   "Instantaneous active mixing layer depth", units="m", conversion=US%Z_to_m)
+  endif
+
+  ! visc%sfc_buoy_flx is used to communicate the state of the (e)PBL or KPP to the rest of the model
+  call get_param(param_file, mdl, "MLE%USE_BODNER23", MLE_use_Bodner, &
+                 default=.false., do_not_log=.true.)
+  if (MLE_use_PBL_MLD .or. MLE_use_Bodner) then
+    call safe_alloc_ptr(visc%sfc_buoy_flx, isd, ied, jsd, jed)
+    call register_restart_field(visc%sfc_buoy_flx, "SFC_BFLX", .false., restart_CS, &
+                                "Instantaneous surface buoyancy flux", "m2 s-3", &
+                                conversion=US%Z_to_m**2*US%s_to_T**3)
   endif
 
 end subroutine set_visc_register_restarts
