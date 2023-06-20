@@ -301,6 +301,7 @@ subroutine calc_derived_thermo(tv, h, G, GV, US, halo, debug)
         p_t(i,j) = p_t(i,j) + dp(i,j)
       enddo ; enddo ; endif
     enddo
+    tv%valid_SpV_halo = halos
 
     if (do_debug) then
       call hchksum(h, "derived_thermo h", G%HI, haloshift=halos, scale=GV%H_to_MKS)
@@ -361,6 +362,10 @@ subroutine find_rho_bottom(h, dz, pres_int, dz_avg, tv, j, G, GV, US, Rho_bot)
       rho_bot(i) = GV%Rho0
     enddo
   else
+    ! Check that SpV_avg has been set.
+    if (tv%valid_SpV_halo < 0) call MOM_error(FATAL, &
+        "find_rho_bottom called in fully non-Boussinesq mode with invalid values of SpV_avg.")
+
     ! Set the bottom density to the inverse of the in situ specific volume averaged over the
     ! specified distance, with care taken to avoid having compressibility lead to an imprint
     ! of the layer thicknesses on this density.
@@ -619,12 +624,23 @@ subroutine thickness_to_dz_3d(h, tv, dz, G, GV, US, halo_size)
   integer,       optional, intent(in)    :: halo_size !< Width of halo within which to
                                                !! calculate thicknesses
   ! Local variables
+  character(len=128) :: mesg  	! A string for error messages
   integer :: i, j, k, is, ie, js, je, halo, nz
 
   halo = 0 ; if (present(halo_size)) halo = max(0,halo_size)
   is = G%isc-halo ; ie = G%iec+halo ; js = G%jsc-halo ; je = G%jec+halo ; nz = GV%ke
 
   if ((.not.GV%Boussinesq) .and. allocated(tv%SpV_avg))  then
+    if ((allocated(tv%SpV_avg)) .and. (tv%valid_SpV_halo < halo)) then
+      if (tv%valid_SpV_halo < 0) then
+        mesg = "invalid values of SpV_avg."
+      else
+        write(mesg, '("insufficiently large SpV_avg halos of width ", i2, " but ", i2," is needed.")') &
+                     tv%valid_SpV_halo, halo
+      endif
+      call MOM_error(FATAL, "thickness_to_dz called in fully non-Boussinesq mode with "//trim(mesg))
+    endif
+
     do k=1,nz ; do j=js,je ; do i=is,ie
       dz(i,j,k) = GV%H_to_RZ * h(i,j,k) * tv%SpV_avg(i,j,k)
     enddo ; enddo ; enddo
@@ -655,12 +671,23 @@ subroutine thickness_to_dz_jslice(h, tv, dz, j, G, GV, halo_size)
   integer,       optional, intent(in)    :: halo_size !< Width of halo within which to
                                                !! calculate thicknesses
   ! Local variables
+  character(len=128) :: mesg  	! A string for error messages
   integer :: i, k, is, ie, halo, nz
 
   halo = 0 ; if (present(halo_size)) halo = max(0,halo_size)
   is = G%isc-halo ; ie = G%iec+halo ; nz = GV%ke
 
   if ((.not.GV%Boussinesq) .and. allocated(tv%SpV_avg))  then
+    if ((allocated(tv%SpV_avg)) .and. (tv%valid_SpV_halo < halo)) then
+      if (tv%valid_SpV_halo < 0) then
+        mesg = "invalid values of SpV_avg."
+      else
+        write(mesg, '("insufficiently large SpV_avg halos of width ", i2, " but ", i2," is needed.")') &
+                     tv%valid_SpV_halo, halo
+      endif
+      call MOM_error(FATAL, "thickness_to_dz called in fully non-Boussinesq mode with "//trim(mesg))
+    endif
+
     do k=1,nz ; do i=is,ie
       dz(i,k) = GV%H_to_RZ * h(i,j,k) * tv%SpV_avg(i,j,k)
     enddo ; enddo

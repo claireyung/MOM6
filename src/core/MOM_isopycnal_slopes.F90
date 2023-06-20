@@ -4,6 +4,7 @@ module MOM_isopycnal_slopes
 ! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging,     only : hchksum, uvchksum
+use MOM_error_handler, only : MOM_error, FATAL
 use MOM_grid,          only : ocean_grid_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : thermo_var_ptrs
@@ -206,6 +207,17 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
     endif
   endif
 
+  if ((use_EOS .and. allocated(tv%SpV_avg) .and. (tv%valid_SpV_halo < 1)) .and. &
+      (present_N2_u .or. present(dzSxN) .or. present_N2_v .or. present(dzSyN))) then
+    if (tv%valid_SpV_halo < 0) then
+      call MOM_error(FATAL, "calc_isoneutral_slopes called in fully non-Boussinesq mode "//&
+                            "with invalid values of SpV_avg.")
+    else
+      call MOM_error(FATAL, "calc_isoneutral_slopes called in fully non-Boussinesq mode "//&
+                            "with insufficiently large SpV_avg halos of width 0 but 1 is needed.")
+    endif
+  endif
+
   ! Find the maximum and minimum permitted streamfunction.
   if (associated(tv%p_surf)) then
     !$OMP parallel do default(shared)
@@ -249,7 +261,7 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
       enddo
       call calculate_density_derivs(T_u, S_u, pres_u, drho_dT_u, drho_dS_u, &
                                     tv%eqn_of_state, EOSdom_u)
-      if ((present_N2_u) .or. (present(dzSxN))) then
+      if (present_N2_u .or. (present(dzSxN))) then
         if (allocated(tv%SpV_avg)) then
           do I=is-1,ie
             GxSpV_u(I) = GV%g_Earth *  0.25* ((tv%SpV_avg(i,j,k) + tv%SpV_avg(i+1,j,k)) + &
