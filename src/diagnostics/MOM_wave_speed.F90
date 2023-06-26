@@ -7,6 +7,7 @@ use MOM_diag_mediator, only : post_data, query_averaging_enabled, diag_ctrl
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser, only : log_version
 use MOM_grid, only : ocean_grid_type
+use MOM_interface_heights, only : thickness_to_dz
 use MOM_remapping, only : remapping_CS, initialize_remapping, remapping_core_h, interpolate_column
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
@@ -761,22 +762,23 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
   type(thermo_var_ptrs),                           intent(in)  :: tv !< Thermodynamic variables
   integer,                                         intent(in)  :: nmodes !< Number of modes
   type(wave_speed_CS),                             intent(in)  :: CS !< Wave speed control struct
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1,nmodes),intent(out) :: w_struct !< Wave Vertical profile [nondim]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV),nmodes),intent(out) :: u_struct !< Wave Horizontal profile [Z-1 ~> m-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1,nmodes),intent(out) :: w_struct !< Wave vertical velocity profile [nondim]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV),nmodes),intent(out) :: u_struct !< Wave horizontal velocity profile
+                                                                     !! [Z-1 ~> m-1]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_max !< Maximum of wave horizontal profile
-                                                                               !! [Z-1 ~> m-1]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_max !< Maximum of wave horizontal velocity
+                                                                     !! profile [Z-1 ~> m-1]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_bot !< Bottom value of wave horizontal
-                                                                               !! profile [Z-1 ~> m-1]
-  real, dimension(SZI_(G),SZJ_(G)),                intent(out) :: Nb !< Bottom value of Brunt Vaissalla freqency
+                                                                     !! velocity profile [Z-1 ~> m-1]
+  real, dimension(SZI_(G),SZJ_(G)),                intent(out) :: Nb !< Bottom value of buoyancy freqency
                                                                      !! [T-1 ~> s-1]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_w2 !< depth-integrated
-                                                                         !! vertical profile squared [Z ~> m]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_U2 !< depth-integrated
-                                                                         !! horizontal profile squared [Z-1 ~> m-1]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_N2w2 !< depth-integrated Brunt Vaissalla
-                                                                           !! frequency times vertical
-                                                                           !! profile squared [Z T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_w2 !< depth-integrated vertical velocity
+                                                                     !! profile squared [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_U2 !< depth-integrated horizontal velocity
+                                                                     !! profile squared [H Z-2 ~> m-1 or kg m-4]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_N2w2 !< depth-integrated buoyancy frequency
+                                                                     !! times vertical velocity profile
+                                                                     !! squared [H T-2 ~> m s-2 or kg m-2 s-2]
   logical,             optional,                   intent(in)  :: full_halos !< If true, do the calculation
                                                                              !! over the entire data domain.
 
@@ -792,16 +794,20 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
     H_top, &      ! The distance of each filtered interface from the ocean surface [H ~> m or kg m-2]
     H_bot, &      ! The distance of each filtered interface from the bottom [H ~> m or kg m-2]
     gprime, &     ! The reduced gravity across each interface [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2].
-    N2            ! The Brunt Vaissalla freqency squared [T-2 ~> s-2]
+    N2            ! The buoyancy freqency squared [T-2 ~> s-2]
   real, dimension(SZK_(GV),SZI_(G)) :: &
     Hf, &         ! Layer thicknesses after very thin layers are combined [H ~> m or kg m-2]
+    dzf, &        ! Layer vertical extents after very thin layers are combined [Z ~> m]
     Tf, &         ! Layer temperatures after very thin layers are combined [C ~> degC]
     Sf, &         ! Layer salinities after very thin layers are combined [S ~> ppt]
     Rf            ! Layer densities after very thin layers are combined [R ~> kg m-3]
+  real, dimension(SZI_(G),SZK_(GV)) :: &
+    dz_2d         ! Height change across layers [Z ~> m]
   real, dimension(SZK_(GV)) :: &
     Igl, Igu, &   ! The inverse of the reduced gravity across an interface times
                   ! the thickness of the layer below (Igl) or above (Igu) it, in [T2 L-2 ~> s2 m-2].
     Hc, &         ! A column of layer thicknesses after convective instabilities are removed [H ~> m or kg m-2]
+    dzc, &        ! A column of layer vertical extents after convective instabilities are removed [Z ~> m]
     Tc, &         ! A column of layer temperatures after convective instabilities are removed [C ~> degC]
     Sc, &         ! A column of layer salinities after convective instabilities are removed [S ~> ppt]
     Rc            ! A column of layer densities after convective instabilities are removed [R ~> kg m-3]
@@ -839,7 +845,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
   real :: H_to_pres ! A conversion factor from thicknesses to pressure [R L2 T-2 H-1 ~> Pa m-1 or Pa m2 kg-1]
   real, dimension(SZI_(G)) :: &
     htot, hmin, &  ! Thicknesses [H ~> m or kg m-2]
-    H_here, &      ! A thickness [H ~> m or kg m-2]
+    H_here, &      ! A layer thickness [H ~> m or kg m-2]
+    dz_here, &     ! A layer vertical extent [Z ~> m]
     HxT_here, &    ! A layer integrated temperature [C H ~> degC m or degC kg m-2]
     HxS_here, &    ! A layer integrated salinity [S H ~> ppt m or ppt kg m-2]
     HxR_here       ! A layer integrated density [R H ~> kg m-2 or kg2 m-5]
@@ -874,13 +881,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
   integer :: sub, sub_it
   integer :: i, j, k, k2, itt, is, ie, js, je, nz, iint, m
   real, dimension(SZK_(GV)+1) ::  modal_structure !< Normalized model structure [nondim]
-  real, dimension(SZK_(GV)) ::  modal_structure_fder !< Normalized model structure [H-1 ~> m-1 or m2 kg-1]
+  real, dimension(SZK_(GV)) ::  modal_structure_fder !< Normalized model structure [Z-1 ~> m-1]
   real :: mode_struct(SZK_(GV)+1) ! The mode structure [nondim], but it is also temporarily
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
-  real :: mode_struct_fder(SZK_(GV)) ! The mode structure 1st derivative [H-1 ~> m-1 or m2 kg-1], but it is also temporarily
-                         ! in units of [H-1 L2 T-2 ~> m s-2 or m4 kg-1 s-2] after it is modified inside of tdma6.
+  real :: mode_struct_fder(SZK_(GV)) ! The mode structure 1st derivative [Z-1 ~> m-1], but it is also temporarily
+                         ! in units of [Z-1 L2 T-2 ~> m s-2] after it is modified inside of tdma6.
   real :: mode_struct_sq(SZK_(GV)+1) ! The square of mode structure [nondim]
-  real :: mode_struct_fder_sq(SZK_(GV)) ! The square of mode structure 1st derivative [H-2 ~> m-2 or m4 kg-2]
+  real :: mode_struct_fder_sq(SZK_(GV)) ! The square of mode structure 1st derivative [Z-2 ~> m-2]
 
 
   real :: ms_min, ms_max ! The minimum and maximum mode structure values returned from tdma6 [L2 T-2 ~> m2 s-2]
@@ -940,30 +947,36 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
     do i=is,ie ; htot(i) = 0.0 ; enddo
     do k=1,nz ; do i=is,ie ; htot(i) = htot(i) + h(i,j,k) ; enddo ; enddo
 
+    call thickness_to_dz(h, tv, dz_2d, j, G, GV)
+
     do i=is,ie
-      hmin(i) = htot(i)*min_h_frac ; kf(i) = 1 ; H_here(i) = 0.0
+      hmin(i) = htot(i)*min_h_frac ; kf(i) = 1 ; H_here(i) = 0.0 ; dz_here(i) = 0.0
       HxT_here(i) = 0.0 ; HxS_here(i) = 0.0 ; HxR_here(i) = 0.0
     enddo
     if (use_EOS .or. use_nonBous_EOS) then
       do k=1,nz ; do i=is,ie
         if ((H_here(i) > hmin(i)) .and. (h(i,j,k) > hmin(i))) then
           Hf(kf(i),i) = H_here(i)
+          dzf(kf(i),i) = dz_here(i)
           Tf(kf(i),i) = HxT_here(i) / H_here(i)
           Sf(kf(i),i) = HxS_here(i) / H_here(i)
           kf(i) = kf(i) + 1
 
           ! Start a new layer
           H_here(i) = h(i,j,k)
+          dz_here(i) = dz_2d(i,k)
           HxT_here(i) = h(i,j,k)*tv%T(i,j,k)
           HxS_here(i) = h(i,j,k)*tv%S(i,j,k)
         else
           H_here(i) = H_here(i) + h(i,j,k)
+          dz_here(i) = dz_here(i) + dz_2d(i,k)
           HxT_here(i) = HxT_here(i) + h(i,j,k)*tv%T(i,j,k)
           HxS_here(i) = HxS_here(i) + h(i,j,k)*tv%S(i,j,k)
         endif
       enddo ; enddo
       do i=is,ie ; if (H_here(i) > 0.0) then
         Hf(kf(i),i) = H_here(i)
+        dzf(kf(i),i) = dz_here(i)
         Tf(kf(i),i) = HxT_here(i) / H_here(i)
         Sf(kf(i),i) = HxS_here(i) / H_here(i)
       endif ; enddo
@@ -971,18 +984,22 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
       do k=1,nz ; do i=is,ie
         if ((H_here(i) > hmin(i)) .and. (h(i,j,k) > hmin(i))) then
           Hf(kf(i),i) = H_here(i) ; Rf(kf(i),i) = HxR_here(i) / H_here(i)
+          dzf(kf(i),i) = dz_here(i)
           kf(i) = kf(i) + 1
 
           ! Start a new layer
           H_here(i) = h(i,j,k)
+          dz_here(i) = dz_2d(i,k)
           HxR_here(i) = h(i,j,k)*GV%Rlay(k)
         else
           H_here(i) = H_here(i) + h(i,j,k)
+          dz_here(i) = dz_here(i) + dz_2d(i,k)
           HxR_here(i) = HxR_here(i) + h(i,j,k)*GV%Rlay(k)
         endif
       enddo ; enddo
       do i=is,ie ; if (H_here(i) > 0.0) then
         Hf(kf(i),i) = H_here(i) ; Rf(kf(i),i) = HxR_here(i) / H_here(i)
+        dzf(kf(i),i) = dz_here(i)
       endif ; enddo
     endif
 
@@ -1093,7 +1110,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
           ! (rho(2)-rho(1))*h(1)*h(2) / H_tot.
           if (use_EOS) then
             kc = 1
-            Hc(1) = Hf(1,i) ; Tc(1) = Tf(1,i) ; Sc(1) = Sf(1,i)
+            Hc(1) = Hf(1,i) ; dzc(1) = dzf(1,i) ; Tc(1) = Tf(1,i) ; Sc(1) = Sf(1,i)
             do k=2,kf(i)
               if (better_est) then
                 merge = ((drho_dT(K)*(Tf(k,i)-Tc(kc)) + drho_dS(K)*(Sf(k,i)-Sc(kc))) * &
@@ -1107,7 +1124,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 I_Hnew = 1.0 / (Hc(kc) + Hf(k,i))
                 Tc(kc) = (Hc(kc)*Tc(kc) + Hf(k,i)*Tf(k,i)) * I_Hnew
                 Sc(kc) = (Hc(kc)*Sc(kc) + Hf(k,i)*Sf(k,i)) * I_Hnew
-                Hc(kc) = (Hc(kc) + Hf(k,i))
+                Hc(kc) = Hc(kc) + Hf(k,i)
+                dzc(kc) = dzc(kc) + dzf(k,i)
                 ! Backtrack to remove any convective instabilities above...  Note
                 ! that the tolerance is a factor of two larger, to avoid limit how
                 ! far back we go.
@@ -1124,7 +1142,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                     I_Hnew = 1.0 / (Hc(kc) + Hc(kc-1))
                     Tc(kc-1) = (Hc(kc)*Tc(kc) + Hc(kc-1)*Tc(kc-1)) * I_Hnew
                     Sc(kc-1) = (Hc(kc)*Sc(kc) + Hc(kc-1)*Sc(kc-1)) * I_Hnew
-                    Hc(kc-1) = (Hc(kc) + Hc(kc-1))
+                    Hc(kc-1) = Hc(kc) + Hc(kc-1)
+                    dzc(kc-1) = dzc(kc) + dzc(kc-1)
                     kc = kc - 1
                   else ; exit ; endif
                 enddo
@@ -1132,7 +1151,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 ! Add a new layer to the column.
                 kc = kc + 1
                 drho_dS(Kc) = drho_dS(K) ; drho_dT(Kc) = drho_dT(K)
-                Tc(kc) = Tf(k,i) ; Sc(kc) = Sf(k,i) ; Hc(kc) = Hf(k,i)
+                Tc(kc) = Tf(k,i) ; Sc(kc) = Sf(k,i) ; Hc(kc) = Hf(k,i) ; dzc(kc) = dzf(k,i)
               endif
             enddo
             ! At this point there are kc layers and the gprimes should be positive.
@@ -1141,7 +1160,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             enddo
           elseif (use_nonBous_EOS) then
             kc = 1
-            Hc(1) = Hf(1,i) ; Tc(1) = Tf(1,i) ; Sc(1) = Sf(1,i)
+            Hc(1) = Hf(1,i) ; dzc(1) = dzf(1,i) ; Tc(1) = Tf(1,i) ; Sc(1) = Sf(1,i)
             do k=2,kf(i)
               ! Note the upward differencing here to account for the signs of the specific volume
               ! derivatives, along with the absolute value because dSpVxh_sum is negative.
@@ -1157,7 +1176,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 I_Hnew = 1.0 / (Hc(kc) + Hf(k,i))
                 Tc(kc) = (Hc(kc)*Tc(kc) + Hf(k,i)*Tf(k,i)) * I_Hnew
                 Sc(kc) = (Hc(kc)*Sc(kc) + Hf(k,i)*Sf(k,i)) * I_Hnew
-                Hc(kc) = (Hc(kc) + Hf(k,i))
+                Hc(kc) = Hc(kc) + Hf(k,i)
+                dzc(kc) = dzc(kc) + dzf(k,i)
                 ! Backtrack to remove any convective instabilities above...  Note
                 ! that the tolerance is a factor of two larger, to avoid limit how
                 ! far back we go.
@@ -1174,7 +1194,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                     I_Hnew = 1.0 / (Hc(kc) + Hc(kc-1))
                     Tc(kc-1) = (Hc(kc)*Tc(kc) + Hc(kc-1)*Tc(kc-1)) * I_Hnew
                     Sc(kc-1) = (Hc(kc)*Sc(kc) + Hc(kc-1)*Sc(kc-1)) * I_Hnew
-                    Hc(kc-1) = (Hc(kc) + Hc(kc-1))
+                    Hc(kc-1) = Hc(kc) + Hc(kc-1)
+                    dzc(kc-1) = dzc(kc) + dzc(kc-1)
                     kc = kc - 1
                   else ; exit ; endif
                 enddo
@@ -1182,7 +1203,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 ! Add a new layer to the column.
                 kc = kc + 1
                 dSpV_dS(Kc) = dSpV_dS(K) ; dSpV_dT(Kc) = dSpV_dT(K)
-                Tc(kc) = Tf(k,i) ; Sc(kc) = Sf(k,i) ; Hc(kc) = Hf(k,i)
+                Tc(kc) = Tf(k,i) ; Sc(kc) = Sf(k,i) ; Hc(kc) = Hf(k,i) ; dzc(kc) = dzf(k,i)
               endif
             enddo
             ! At this point there are kc layers and the gprimes should be positive.
@@ -1192,7 +1213,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
           else  ! .not. (use_EOS .or. use_nonBous_EOS)
             ! Do the same with density directly...
             kc = 1
-            Hc(1) = Hf(1,i) ; Rc(1) = Rf(1,i)
+            Hc(1) = Hf(1,i) ; dzc(1) = dzf(1,i) ; Rc(1) = Rf(1,i)
             do k=2,kf(i)
               if (better_est) then
                 merge = ((Rf(k,i) - Rc(kc)) * ((Hc(kc) * Hf(k,i))*I_Htot) < 2.0 * tol_merge*drxh_sum)
@@ -1202,7 +1223,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
               if (merge) then
                 ! Merge this layer with the one above and backtrack.
                 Rc(kc) = (Hc(kc)*Rc(kc) + Hf(k,i)*Rf(k,i)) / (Hc(kc) + Hf(k,i))
-                Hc(kc) = (Hc(kc) + Hf(k,i))
+                Hc(kc) = Hc(kc) + Hf(k,i)
+                dzc(kc) = dzc(kc) + dzf(k,i)
                 ! Backtrack to remove any convective instabilities above...  Note
                 ! that the tolerance is a factor of two larger, to avoid limit how
                 ! far back we go.
@@ -1215,14 +1237,15 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                   if (merge) then
                     ! Merge the two bottommost layers.  At this point kc = k2.
                     Rc(kc-1) = (Hc(kc)*Rc(kc) + Hc(kc-1)*Rc(kc-1)) / (Hc(kc) + Hc(kc-1))
-                    Hc(kc-1) = (Hc(kc) + Hc(kc-1))
+                    Hc(kc-1) = Hc(kc) + Hc(kc-1)
+                    dzc(kc-1) = dzc(kc) + dzc(kc-1)
                     kc = kc - 1
                   else ; exit ; endif
                 enddo
               else
                 ! Add a new layer to the column.
                 kc = kc + 1
-                Rc(kc) = Rf(k,i) ; Hc(kc) = Hf(k,i)
+                Rc(kc) = Rf(k,i) ; Hc(kc) = Hf(k,i) ; dzc(kc) = dzf(k,i)
               endif
             enddo
             ! At this point there are kc layers and the gprimes should be positive.
@@ -1252,15 +1275,28 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             Igu(:) = 0.
             N2(:) = 0.
 
-            do K=2,kc
-              Igl(K) = 1.0/(gprime(K)*Hc(k)) ; Igu(K) = 1.0/(gprime(K)*Hc(k-1))
-              N2(K) = US%L_to_Z**2*GV%Z_to_H**2*gprime(K)/(0.5*(Hc(k)+Hc(k-1))) ! Verified units are [T-2 ~> s-2]
-              if (better_est) then
-                speed2_tot = speed2_tot + gprime(K)*((H_top(K) * H_bot(K)) * I_Htot)
-              else
-                speed2_tot = speed2_tot + gprime(K)*(Hc(k-1)+Hc(k))
-              endif
-            enddo
+            if (use_nonBous_EOS) then
+              do K=2,kc
+                Igl(K) = 1.0 / (gprime(K)*Hc(k)) ; Igu(K) = 1.0 / (gprime(K)*Hc(k-1))
+                N2(K) = 2.0*US%L_to_Z**2*gprime(K) * (Hc(k) + Hc(k-1)) / &  ! Units are [T-2 ~> s-2]
+                       (dzc(k) + dzc(k-1))**2
+                if (better_est) then
+                  speed2_tot = speed2_tot + gprime(K)*((H_top(K) * H_bot(K)) * I_Htot)
+                else
+                  speed2_tot = speed2_tot + gprime(K)*(Hc(k-1)+Hc(k))
+                endif
+              enddo
+            else
+              do K=2,kc
+                Igl(K) = 1.0 / (gprime(K)*Hc(k)) ; Igu(K) = 1.0 / (gprime(K)*Hc(k-1))
+                N2(K) = 2.0*US%L_to_Z**2*GV%Z_to_H*gprime(K) / (dzc(k) + dzc(k-1))  ! Units are [T-2 ~> s-2]
+                if (better_est) then
+                  speed2_tot = speed2_tot + gprime(K)*((H_top(K) * H_bot(K)) * I_Htot)
+                else
+                  speed2_tot = speed2_tot + gprime(K)*(Hc(k-1)+Hc(k))
+                endif
+              enddo
+            endif
 
             ! Set stratification for surface and bottom (setting equal to nearest interface for now)
             N2(1) = N2(2) ; N2(kc+1) = N2(kc)
@@ -1320,7 +1356,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
 
             ! vertical derivative of w at interfaces lives on the layer points
             do k=1,kc
-              mode_struct_fder(k) = (mode_struct(k) - mode_struct(k+1)) / Hc(k)
+              mode_struct_fder(k) = (mode_struct(k) - mode_struct(k+1)) / dzc(k)
             enddo
 
             ! boundary condition for derivative is no-gradient
@@ -1329,8 +1365,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             enddo
 
             ! now save maximum value and bottom value
-            u_struct_bot(i,j,1) = GV%Z_to_H*mode_struct_fder(kc)
-            u_struct_max(i,j,1) = maxval(abs(GV%Z_to_H*mode_struct_fder(1:kc)))
+            u_struct_bot(i,j,1) = mode_struct_fder(kc)
+            u_struct_max(i,j,1) = maxval(abs(mode_struct_fder(1:kc)))
 
             ! Calculate terms for vertically integrated energy equation
             do k=1,kc
@@ -1342,13 +1378,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
 
             ! sum over layers for quantities defined on layer
             do k=1,kc
-              int_U2(i,j,1) = int_U2(i,j,1) + GV%Z_to_H*mode_struct_fder_sq(k) * Hc(k)
+              int_U2(i,j,1) = int_U2(i,j,1) + mode_struct_fder_sq(k) * Hc(k)
             enddo
 
             ! vertical integration with Trapezoidal rule for values at interfaces
             do K=1,kc
-              int_w2(i,j,1) = int_w2(i,j,1) + GV%H_to_Z*0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
-              int_N2w2(i,j,1) = int_N2w2(i,j,1) + GV%H_to_Z*0.5*(mode_struct_sq(K)*N2(K) + &
+              int_w2(i,j,1) = int_w2(i,j,1) + 0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
+              int_N2w2(i,j,1) = int_N2w2(i,j,1) + 0.5*(mode_struct_sq(K)*N2(K) + &
                                                        mode_struct_sq(K+1)*N2(K+1)) * Hc(k)
             enddo
 
@@ -1367,7 +1403,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             enddo
 
             do k=1,nz
-              u_struct(i,j,k,1) = GV%Z_to_H*modal_structure_fder(k)
+              u_struct(i,j,k,1) = modal_structure_fder(k)
             enddo
 
             ! Find other eigen values if c1 is of significant magnitude, > cn_thresh
@@ -1496,7 +1532,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
 
                 ! derivative of vertical profile (i.e. dw/dz) is evaluated at the layer point
                 do k=1,kc
-                  mode_struct_fder(k) = (mode_struct(k) - mode_struct(k+1)) / Hc(k)
+                  mode_struct_fder(k) = (mode_struct(k) - mode_struct(k+1)) / dzc(k)
                 enddo
 
                 ! boundary condition for 1st derivative is no-gradient
@@ -1505,8 +1541,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 enddo
 
                 ! now save maximum value and bottom value
-                u_struct_bot(i,j,m) = GV%Z_to_H*mode_struct_fder(kc)
-                u_struct_max(i,j,m) = maxval(abs(GV%Z_to_H*mode_struct_fder(1:kc)))
+                u_struct_bot(i,j,m) = mode_struct_fder(kc)
+                u_struct_max(i,j,m) = maxval(abs(mode_struct_fder(1:kc)))
 
                 ! Calculate terms for vertically integrated energy equation
                 do k=1,kc
@@ -1518,13 +1554,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
 
                 ! sum over layers for integral of quantities defined at layer points
                 do k=1,kc
-                  int_U2(i,j,m) = int_U2(i,j,m) + GV%Z_to_H*mode_struct_fder_sq(k) * Hc(k)
+                  int_U2(i,j,m) = int_U2(i,j,m) + mode_struct_fder_sq(k) * Hc(k)
                 enddo
 
                 ! vertical integration with Trapezoidal rule for quantities on interfaces
                 do K=1,kc
-                  int_w2(i,j,m) = int_w2(i,j,m) + GV%H_to_Z*0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
-                  int_N2w2(i,j,m) = int_N2w2(i,j,m) + GV%H_to_Z*0.5*(mode_struct_sq(K)*N2(K) + &
+                  int_w2(i,j,m) = int_w2(i,j,m) + 0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
+                  int_N2w2(i,j,m) = int_N2w2(i,j,m) + 0.5*(mode_struct_sq(K)*N2(K) + &
                                                            mode_struct_sq(K+1)*N2(K+1)) * Hc(k)
                 enddo
 
@@ -1544,7 +1580,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 enddo
 
                 do k=1,nz
-                  u_struct(i,j,k,m+1) = GV%Z_to_H*modal_structure_fder(k)
+                  u_struct(i,j,k,m+1) = modal_structure_fder(k)
                 enddo
 
               enddo ! n-loop
