@@ -15,8 +15,9 @@ use MOM_error_handler, only : callTree_enter, callTree_leave, callTree_waypoint
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,  only : forcing, extractFluxes1d, forcing_SinglePointPrint
 use MOM_grid,          only : ocean_grid_type
-use MOM_interpolate,   only : init_external_field, time_interp_external, time_interp_external_init
 use MOM_interface_heights, only : thickness_to_dz
+use MOM_interpolate,   only : init_external_field, time_interp_external, time_interp_external_init
+use MOM_interpolate,   only : external_field
 use MOM_io,            only : slasher
 use MOM_opacity,       only : set_opacity, opacity_CS, extract_optics_slice, extract_optics_fields
 use MOM_opacity,       only : optics_type, optics_nbands, absorbRemainingSW, sumSWoverBands
@@ -65,7 +66,7 @@ type, public :: diabatic_aux_CS ; private
                              !! is added with a temperature of the local SST.
   logical :: var_pen_sw      !<   If true, use one of the CHL_A schemes to determine the
                              !! e-folding depth of incoming shortwave radiation.
-  integer :: sbc_chl         !< An integer handle used in time interpolation of
+  type(external_field) :: sbc_chl   !< A handle used in time interpolation of
                              !! chlorophyll read from a file.
   logical ::  chl_from_file  !< If true, chl_a is read from a file.
 
