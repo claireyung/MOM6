@@ -817,7 +817,7 @@ subroutine entrainment_diffusive(h, tv, fluxes, dt, G, GV, US, CS, ea, eb, &
     endif   !  associated(tv%eqn_of_state))
 
     if (CS%id_Kd > 0) then
-      Idt = GV%H_to_Z / dt
+      Idt = (GV%H_to_m*US%m_to_Z) / dt
       do k=2,nz-1 ; do i=is,ie
         if (k<kb(i)) then ; Kd_here = 0.0 ; else
           Kd_here = F(i,k) * ( h(i,j,k) + ((ea(i,j,k) - eb(i,j,k-1)) + &
