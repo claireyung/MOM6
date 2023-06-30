@@ -2358,7 +2358,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                "20190101 recover the answers from the end of 2018, while higher values "//&
                "use updated and more robust forms of the same expressions.  "//&
                "If both SURFACE_2018_ANSWERS and SURFACE_ANSWER_DATE are specified, the "//&
-               "latter takes precedence.", default=default_answer_date)
+               "latter takes precedence.", default=default_answer_date, do_not_log=non_Bous)
+  if (non_Bous) CS%answer_date = 99991231
 
   call get_param(param_file, "MOM", "USE_DIABATIC_TIME_BUG", CS%use_diabatic_time_bug, &
                  "If true, uses the wrong calendar time for diabatic processes, as was "//&
@@ -2880,8 +2881,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
     endif
   endif
 
-  ! Allocate any derived equation of state fields.
-  if (use_temperature .and. .not.(GV%Boussinesq .or. GV%semi_Boussinesq)) then
+  ! Allocate any derived densities or other equation of state derived fields.
+  if (.not.(GV%Boussinesq .or. GV%semi_Boussinesq)) then
     allocate(CS%tv%SpV_avg(isd:ied,jsd:jed,nz), source=0.0)
     CS%tv%valid_SpV_halo = -1  ! This array does not yet have any valid data.
   endif
