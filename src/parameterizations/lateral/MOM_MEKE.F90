@@ -115,6 +115,9 @@ type, public :: MEKE_CS ; private
   logical :: fixed_total_depth  !< If true, use the nominal bathymetric depth as the estimate of
                         !! the time-varying ocean depth.  Otherwise base the depth on the total
                         !! ocean mass per unit area.
+  real :: rho_fixed_total_depth !< A density used to translate the nominal bathymetric depth into an
+                        !! estimate of the total ocean mass per unit area when MEKE_FIXED_TOTAL_DEPTH
+                        !! is true [R ~> kg m-3]
   logical :: kh_flux_enabled !< If true, lateral diffusive MEKE flux is enabled.
   logical :: initialize !< If True, invokes a steady state solver to calculate MEKE.
   logical :: debug      !< If true, write out checksums of data for debugging
@@ -344,10 +347,17 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, US, CS, hu, h
     enddo
 
     if (CS%fixed_total_depth) then
-      !$OMP parallel do default(shared)
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        depth_tot(i,j) = (G%bathyT(i,j) + G%Z_ref) * GV%Z_to_H
-      enddo ; enddo
+      if (GV%Boussinesq) then
+        !$OMP parallel do default(shared)
+        do j=js-1,je+1 ; do i=is-1,ie+1
+          depth_tot(i,j) = (G%bathyT(i,j) + G%Z_ref) * GV%Z_to_H
+        enddo ; enddo
+      else
+        !$OMP parallel do default(shared)
+        do j=js-1,je+1 ; do i=is-1,ie+1
+          depth_tot(i,j) = (G%bathyT(i,j) + G%Z_ref) * CS%rho_fixed_total_depth * GV%RZ_to_H
+        enddo ; enddo
+      endif
     else
       !$OMP parallel do default(shared)
       do j=js-1,je+1 ; do i=is-1,ie+1
@@ -1290,6 +1300,11 @@ logical function MEKE_init(Time, G, GV, US, param_file, diag, dbcomms_CS, CS, ME
                  "If true, use the nominal bathymetric depth as the estimate of the "//&
                  "time-varying ocean depth.  Otherwise base the depth on the total ocean mass"//&
                  "per unit area.", default=.true.)
+  call get_param(param_file, mdl, "MEKE_TOTAL_DEPTH_RHO", CS%rho_fixed_total_depth, &
+                 "A density used to translate the nominal bathymetric depth into an estimate "//&
+                 "of the total ocean mass per unit area when MEKE_FIXED_TOTAL_DEPTH is true.", &
+                 units="kg m-3", default=GV%Rho0*US%R_to_kg_m3, scale=US%kg_m3_to_R, &
+                 do_not_log=(GV%Boussinesq.or.(.not.CS%fixed_total_depth)))
 
   call get_param(param_file, mdl, "MEKE_ALPHA_DEFORM", CS%aDeform, &
                  "If positive, is a coefficient weighting the deformation scale "//&
@@ -1342,7 +1357,7 @@ logical function MEKE_init(Time, G, GV, US, param_file, diag, dbcomms_CS, CS, ME
                  "field to the bottom stress.", units="nondim", default=0.003)
   call get_param(param_file, mdl, "MEKE_CDRAG", CS%cdrag, &
                  "Drag coefficient relating the magnitude of the velocity "//&
-                 "field to the bottom stress in MEKE.", units="nondim", default=cdrag, scale=US%L_to_Z*GV%Z_to_H)
+                 "field to the bottom stress in MEKE.", units="nondim", default=cdrag, scale=US%L_to_m*GV%m_to_H)
   call get_param(param_file, mdl, "LAPLACIAN", laplacian, default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "BIHARMONIC", biharmonic, default=.false., do_not_log=.true.)
 
