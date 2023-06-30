@@ -197,6 +197,8 @@ type, public :: wave_parameters_CS ; private
   real :: VonKar = -1.0 !< The von Karman coefficient as used in the MOM_wave_interface module [nondim]
   real :: rho_air  !< A typical density of air at sea level, as used in wave calculations [R ~> kg m-3]
   real :: nu_air   !< The viscosity of air, as used in wave calculations [Z2 T-1 ~> m2 s-1]
+  real :: rho_ocn  !< A typical surface density of seawater, as used in wave calculations in
+                   !! comparison with the density of air [R ~> kg m-3].  The default is RHO_0.
   real :: SWH_from_u10sq !< A factor for converting the square of the 10 m wind speed to the
                    !! significant wave height [Z T2 L-2 ~> s2 m-1]
   real :: Charnock_min !< The minimum value of the Charnock coefficient, which relates the square of
@@ -333,7 +335,7 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag, restar
 
   if (StatisticalWaves) then
     CS%WaveMethod = LF17
-    call set_LF17_wave_params(param_file, mdl, US, CS)
+    call set_LF17_wave_params(param_file, mdl, GV, US, CS)
     if (.not.use_waves) return
   else
     CS%WaveMethod = NULL_WaveMethod
@@ -499,7 +501,7 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag, restar
          "Flag to disable updating DHH85 Stokes drift.", default=.false.)
   case (LF17_STRING) !Li and Fox-Kemper 17 wind-sea Langmuir number
     CS%WaveMethod = LF17
-    call set_LF17_wave_params(param_file, mdl, US, CS)
+    call set_LF17_wave_params(param_file, mdl, GV, US, CS)
   case (EFACTOR_STRING) !Li and Fox-Kemper 16
     CS%WaveMethod = EFACTOR
   case default
@@ -577,9 +579,10 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag, restar
 end subroutine MOM_wave_interface_init
 
 !> Set the parameters that are used to determine the averaged Stokes drift and Langmuir numbers
-subroutine set_LF17_wave_params(param_file, mdl, US, CS)
+subroutine set_LF17_wave_params(param_file, mdl, GV, US, CS)
   type(param_file_type),   intent(in)    :: param_file !< Input parameter structure
   character(len=*),        intent(in)    :: mdl        !< A module name to use in the get_param calls
+  type(verticalGrid_type), intent(in)    :: GV         !< Vertical grid structure
   type(unit_scale_type),   intent(in)    :: US         !< A dimensional unit scaling type
   type(wave_parameters_CS), pointer      :: CS         !< Wave parameter control structure
 
@@ -595,6 +598,10 @@ subroutine set_LF17_wave_params(param_file, mdl, US, CS)
   call get_param(param_file, mdl, "RHO_AIR", CS%rho_air, &
                  "A typical density of air at sea level, as used in wave calculations", &
                  units="kg m-3", default=1.225, scale=US%kg_m3_to_R)
+  call get_param(param_file, mdl, "RHO_SFC_WAVES", CS%Rho_ocn, &
+                 "A typical surface density of seawater, as used in wave calculations in "//&
+                 "comparison with the density of air.  The default is RHO_0.", &
+                 units="kg m-3", default=GV%Rho0*US%R_to_kg_m3, scale=US%kg_m3_to_R)
   call get_param(param_file, mdl, "WAVE_HEIGHT_SCALE_FACTOR", CS%SWH_from_u10sq, &
                  "A factor relating the square of the 10 m wind speed to the significant "//&
                  "wave height, with a default value based on the Pierson-Moskowitz spectrum.", &
@@ -1323,7 +1330,7 @@ subroutine get_StokesSL_LiFoxKemper(ustar, hbl, GV, US, CS, UStokes_SL, LA)
     ! This code should be revised to minimize the number of divisions and cancel out common factors.
 
     ! Computing u10 based on u_star and COARE 3.5 relationships
-    call ust_2_u10_coare3p5(ustar*sqrt(GV%Rho0/CS%rho_air), u10, GV, US, CS)
+    call ust_2_u10_coare3p5(ustar*sqrt(CS%rho_ocn/CS%rho_air), u10, GV, US, CS)
     ! surface Stokes drift
     UStokes = us_to_u10*u10
     !
