@@ -32,8 +32,8 @@ implicit none ; private
 
 public diabatic_aux_init, diabatic_aux_end
 public make_frazil, adjust_salt, differential_diffuse_T_S, triDiagTS, triDiagTS_Eulerian
-public find_uv_at_h, diagnoseMLDbyDensityDifference, applyBoundaryFluxesInOut, set_pen_shortwave
-public diagnoseMLDbyEnergy
+public find_uv_at_h, find_ustar, applyBoundaryFluxesInOut, set_pen_shortwave
+public diagnoseMLDbyEnergy, diagnoseMLDbyDensityDifference
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -382,6 +382,40 @@ subroutine adjust_salt(h, tv, G, GV, CS)
 !  call cpu_clock_end(id_clock_adjust_salt)
 
 end subroutine adjust_salt
+
+!> Determine the friction velocity, perhaps using the evolving surface density.
+subroutine find_ustar(fluxes, tv, U_star, G, GV, US)
+  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
+  type(forcing),           intent(in)  :: fluxes !< Surface fluxes container
+  type(thermo_var_ptrs),   intent(in)  :: tv   !< Structure containing pointers to any
+                                               !! available thermodynamic fields.
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(out) :: U_star !< The surface friction velocity [Z T-1 ~> m s-1]
+
+  ! Local variables
+  real :: I_rho        ! The inverse of the reference density times a ratio of scaling
+                       ! factors [Z L-1 R-1 ~> m3 kg-1]
+  integer :: i, j, k, is, ie, js, je
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+
+  if (GV%Boussinesq) then
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = fluxes%ustar(i,j)
+    enddo ; enddo
+  elseif (allocated(tv%SpV_avg)) then
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+    enddo ; enddo
+  else
+    I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = sqrt(fluxes%tau_mag(i,j) * I_rho)
+    enddo ; enddo
+  endif
+
+end subroutine find_ustar
 
 !> This is a simple tri-diagonal solver for T and S.
 !! "Simple" means it only uses arrays hold, ea and eb.

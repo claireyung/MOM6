@@ -12,8 +12,9 @@ use MOM_CVMix_shear,         only : CVMix_shear_is_used
 use MOM_CVMix_ddiff,         only : CVMix_ddiff_is_used
 use MOM_diabatic_aux,        only : diabatic_aux_init, diabatic_aux_end, diabatic_aux_CS
 use MOM_diabatic_aux,        only : make_frazil, adjust_salt, differential_diffuse_T_S, triDiagTS
-use MOM_diabatic_aux,        only : triDiagTS_Eulerian, find_uv_at_h, diagnoseMLDbyDensityDifference
-use MOM_diabatic_aux,        only : applyBoundaryFluxesInOut, diagnoseMLDbyEnergy, set_pen_shortwave
+use MOM_diabatic_aux,        only : triDiagTS_Eulerian, find_uv_at_h, find_ustar
+use MOM_diabatic_aux,        only : applyBoundaryFluxesInOut, set_pen_shortwave
+use MOM_diabatic_aux,        only : diagnoseMLDbyDensityDifference, diagnoseMLDbyEnergy
 use MOM_diag_mediator,       only : post_data, register_diag_field, safe_alloc_ptr
 use MOM_diag_mediator,       only : post_product_sum_u, post_product_sum_v
 use MOM_diag_mediator,       only : diag_ctrl, time_type, diag_update_remap_grids
@@ -554,6 +555,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     Sdif_flx    ! diffusive diapycnal salt flux across interfaces [S H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
+    U_star, &    ! The friction velocity [Z T-1 ~> m s-1].
     SkinBuoyFlux ! 2d surface buoyancy flux [Z2 T-3 ~> m2 s-3], used by ePBL
 
   logical, dimension(SZI_(G)) :: &
@@ -580,6 +582,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq  = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   dz_neglect = GV%dZ_subroundoff ; dz_neglect2 = dz_neglect*dz_neglect
+
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
 
   showCallTree = callTree_showQuery()
@@ -672,20 +675,23 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     ! unlike other instances where the fluxes are integrated in time over a time-step.
     call calculateBuoyancyFlux2d(G, GV, US, fluxes, CS%optics, h, tv%T, tv%S, tv, &
                                  CS%KPP_buoy_flux, CS%KPP_temp_flux, CS%KPP_salt_flux)
-    ! The KPP scheme calculates boundary layer diffusivities and non-local transport.
 
+    ! Determine the friction velocity, perhaps using the evovling surface density.
+    call find_ustar(fluxes, tv, U_star, G, GV, US)
+
+    ! The KPP scheme calculates boundary layer diffusivities and non-local transport.
     if ( associated(fluxes%lamult) ) then
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
-                            fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
+                           U_star, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
-                          Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, U_star, CS%KPP_buoy_flux, Kd_heat, &
+                         Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
     else
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
-                            fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves)
+                           U_star, CS%KPP_buoy_flux, Waves=Waves)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
-                          Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, U_star, CS%KPP_buoy_flux, Kd_heat, &
+                         Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
     endif
 
     if (associated(Hml)) then
@@ -816,18 +822,23 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
 
     skinbuoyflux(:,:) = 0.0
     call applyBoundaryFluxesInOut(CS%diabatic_aux_CSp, G, GV, US, dt, fluxes, CS%optics, &
-            optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, CS%evap_CFL_limit,                         &
+            optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, CS%evap_CFL_limit, &
             CS%minimum_forcing_depth, cTKE, dSV_dT, dSV_dS, SkinBuoyFlux=SkinBuoyFlux)
 
     if (CS%debug) then
-      call hchksum(ent_t, "after applyBoundaryFluxes ent_t", G%HI, haloshift=0, scale=GV%H_to_m)
-      call hchksum(ent_s, "after applyBoundaryFluxes ent_s", G%HI, haloshift=0, scale=GV%H_to_m)
+      call hchksum(ent_t, "after applyBoundaryFluxes ent_t", G%HI, haloshift=0, scale=GV%H_to_mks)
+      call hchksum(ent_s, "after applyBoundaryFluxes ent_s", G%HI, haloshift=0, scale=GV%H_to_mks)
       call hchksum(cTKE, "after applyBoundaryFluxes cTKE", G%HI, haloshift=0, &
                    scale=US%RZ3_T3_to_W_m2*US%T_to_s)
       call hchksum(dSV_dT, "after applyBoundaryFluxes dSV_dT", G%HI, haloshift=0, &
                    scale=US%kg_m3_to_R*US%degC_to_C)
       call hchksum(dSV_dS, "after applyBoundaryFluxes dSV_dS", G%HI, haloshift=0, &
                    scale=US%kg_m3_to_R*US%ppt_to_S)
+      call hchksum(h, "after applyBoundaryFluxes h", G%HI, haloshift=0, scale=GV%H_to_mks)
+      call hchksum(tv%T, "after applyBoundaryFluxes tv%T", G%HI, haloshift=0, scale=US%C_to_degC)
+      call hchksum(tv%S, "after applyBoundaryFluxes tv%S", G%HI, haloshift=0, scale=US%S_to_ppt)
+      call hchksum(SkinBuoyFlux, "after applyBdryFlux SkinBuoyFlux", G%HI, haloshift=0, &
+                   scale=US%Z_to_m**2*US%s_to_T**3)
     endif
 
     call find_uv_at_h(u, v, h, u_h, v_h, G, GV, US)
@@ -1160,13 +1171,13 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
     Sdif_flx    ! diffusive diapycnal salt flux across interfaces [S H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
+    U_star, &    ! The friction velocity [Z T-1 ~> m s-1].
     SkinBuoyFlux ! 2d surface buoyancy flux [Z2 T-3 ~> m2 s-3], used by ePBL
 
   logical, dimension(SZI_(G)) :: &
     in_boundary  ! True if there are no massive layers below, where massive is defined as
                  ! sufficiently thick that the no-flux boundary conditions have not restricted
                  ! the entrainment - usually sqrt(Kd*dt).
-
   real :: dz_neglect   ! A vertical distance that is so small it is usually lost
                        ! in roundoff and can be neglected [Z ~> m]
   real :: dz_neglect2  ! dz_neglect^2 [Z2 ~> m2]
@@ -1184,6 +1195,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq  = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   dz_neglect = GV%dZ_subroundoff ; dz_neglect2 = dz_neglect*dz_neglect
+
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
   ent_s(:,:,:) = 0.0 ; ent_t(:,:,:) = 0.0
 
@@ -1285,18 +1297,21 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
     call calculateBuoyancyFlux2d(G, GV, US, fluxes, CS%optics, h, tv%T, tv%S, tv, &
                                  CS%KPP_buoy_flux, CS%KPP_temp_flux, CS%KPP_salt_flux)
 
+    ! Determine the friction velocity, perhaps using the evovling surface density.
+    call find_ustar(fluxes, tv, U_star, G, GV, US)
+
     ! The KPP scheme calculates boundary layer diffusivities and non-local transport.
     if ( associated(fluxes%lamult) ) then
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
-                           fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
+                           U_star, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, U_star, CS%KPP_buoy_flux, Kd_heat, &
                        Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
     else
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
-                           fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves)
+                           U_star, CS%KPP_buoy_flux, Waves=Waves)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, U_star, CS%KPP_buoy_flux, Kd_heat, &
                        Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
     endif
 
@@ -1670,6 +1685,7 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
     temp_diag, & ! Diagnostic array of previous temperatures [C ~> degC]
     saln_diag    ! Diagnostic array of previous salinity [S ~> ppt]
   real, dimension(SZI_(G),SZJ_(G)) :: &
+    U_star, &    ! The friction velocity [Z T-1 ~> m s-1].
     Rcv_ml       ! Coordinate density of mixed layer [R ~> kg m-3], used for applying sponges
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
@@ -1903,17 +1919,20 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
       enddo ; enddo ; enddo
     endif
 
+    ! Determine the friction velocity, perhaps using the evovling surface density.
+    call find_ustar(fluxes, tv, U_star, G, GV, US)
+
     if ( associated(fluxes%lamult) ) then
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
-                           fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
+                           U_star, CS%KPP_buoy_flux, Waves=Waves, lamult=fluxes%lamult)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, U_star, CS%KPP_buoy_flux, Kd_heat, &
                          Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves, lamult=fluxes%lamult)
     else
       call KPP_compute_BLD(CS%KPP_CSp, G, GV, US, h, tv%T, tv%S, u, v, tv, &
-                           fluxes%ustar, CS%KPP_buoy_flux, Waves=Waves)
+                           U_star, CS%KPP_buoy_flux, Waves=Waves)
 
-      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, fluxes%ustar, CS%KPP_buoy_flux, Kd_heat, &
+      call KPP_calculate(CS%KPP_CSp, G, GV, US, h, tv, U_star, CS%KPP_buoy_flux, Kd_heat, &
                          Kd_salt, visc%Kv_shear, CS%KPP_NLTheat, CS%KPP_NLTscalar, Waves=Waves)
     endif
 
