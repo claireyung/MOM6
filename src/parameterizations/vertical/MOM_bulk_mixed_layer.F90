@@ -443,7 +443,14 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       eps(i,k) = 0.0 ; if (k > nkmb) eps(i,k) = GV%Angstrom_H
       T(i,k) = tv%T(i,j,k) ; S(i,k) = tv%S(i,j,k)
     enddo ; enddo
-    if (nsw>0) call extract_optics_slice(optics, j, G, GV, opacity=opacity_band, opacity_scale=GV%H_to_Z)
+    if (nsw>0) then
+      if (GV%Boussinesq .or. (.not.allocated(tv%SpV_avg))) then
+        call extract_optics_slice(optics, j, G, GV, opacity=opacity_band, opacity_scale=GV%H_to_Z)
+      else
+        call extract_optics_slice(optics, j, G, GV, opacity=opacity_band, opacity_scale=GV%H_to_RZ, &
+                                  SpV_avg=tv%SpV_avg)
+      endif
+    endif
 
     do k=1,nz ; do i=is,ie
       d_ea(i,k) = 0.0 ; d_eb(i,k) = 0.0
@@ -3915,7 +3922,7 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
   character(len=40)  :: mdl = "MOM_mixed_layer"  ! This module's name.
   real :: omega_frac_dflt  ! The default value for ML_OMEGA_FRAC [nondim]
   real :: ustar_min_dflt   ! The default value for BML_USTAR_MIN [Z T-1 ~> m s-1]
-  real :: Hmix_min_z       ! The default value of HMIX_MIN [Z ~> m]
+  real :: Hmix_min_z       ! HMIX_MIN in units of vertical extent [Z ~> m], used to set other defaults
   integer :: isd, ied, jsd, jed
   logical :: use_temperature, use_omega
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
@@ -3974,7 +3981,7 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "HMIX_MIN", Hmix_min_Z, &
                  "The minimum mixed layer depth if the mixed layer depth "//&
                  "is determined dynamically.", units="m", default=0.0, scale=US%m_to_Z)
-  CS%Hmix_min = GV%Z_to_H * Hmix_min_Z
+  CS%Hmix_min = GV%m_to_H * (US%Z_to_m * Hmix_min_Z)
   call get_param(param_file, mdl, "MECH_TKE_FLOOR", CS%mech_TKE_floor, &
                  "A tiny floor on the amount of turbulent kinetic energy that is used when "//&
                  "the mixed layer does not yet contain HMIX_MIN fluid.  The default is so "//&

@@ -1249,7 +1249,14 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
     ! Nothing more is done on this j-slice if there is no buoyancy forcing.
     if (.not.associated(fluxes%sw)) cycle
 
-    if (nsw>0) call extract_optics_slice(optics, j, G, GV, opacity=opacityBand, opacity_scale=(1.0/GV%Z_to_H))
+    if (nsw>0) then
+      if (GV%Boussinesq .or. (.not.allocated(tv%SpV_avg))) then
+        call extract_optics_slice(optics, j, G, GV, opacity=opacityBand, opacity_scale=GV%H_to_Z)
+      else
+        call extract_optics_slice(optics, j, G, GV, opacity=opacityBand, opacity_scale=GV%H_to_RZ, &
+                                  SpV_avg=tv%SpV_avg)
+      endif
+    endif
 
     ! The surface forcing is contained in the fluxes type.
     ! We aggregate the thermodynamic forcing for a time step into the following:
