@@ -612,13 +612,17 @@ subroutine dz_to_thickness_simple(dz, h, G, GV, US, halo_size, layer_mode)
   layered = .false. ; if (present(layer_mode)) layered = layer_mode
   is = G%isc-halo ; ie = G%iec+halo ; js = G%jsc-halo ; je = G%jec+halo ; nz = GV%ke
 
-  if (GV%Boussinesq .or. (.not.layered)) then
+  if (GV%Boussinesq) then
     do k=1,nz ; do j=js,je ; do i=is,ie
       h(i,j,k) = GV%Z_to_H * dz(i,j,k)
     enddo ; enddo ; enddo
   elseif (layered) then
     do k=1,nz ; do j=js,je ; do i=is,ie
       h(i,j,k) = (GV%RZ_to_H * GV%Rlay(k)) * dz(i,j,k)
+    enddo ; enddo ; enddo
+  else
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      h(i,j,k) = (US%Z_to_m * GV%m_to_H) * dz(i,j,k)
     enddo ; enddo ; enddo
   endif
 
