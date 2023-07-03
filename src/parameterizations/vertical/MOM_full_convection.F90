@@ -92,7 +92,7 @@ subroutine full_convection(G, GV, US, h, tv, T_adj, S_adj, p_surf, Kddt_smooth, 
   if (.not.associated(tv%eqn_of_state)) return
 
   h_neglect = GV%H_subroundoff
-  mix_len = (1.0e20 * nz) * (G%max_depth * GV%Z_to_H)
+  mix_len = (1.0e20 * nz) * (G%max_depth * US%Z_to_m * GV%m_to_H)
 
   do j=js,je
     mix(:,:) = 0.0 ; d_b(:,:) = 1.0
@@ -362,7 +362,7 @@ subroutine smoothed_dRdT_dRdS(h, dz, tv, Kddt, dR_dT, dR_dS, G, GV, US, j, p_sur
       T_f(i,k) = tv%T(i,j,k) ; S_f(i,k) = tv%S(i,j,k)
     enddo ; enddo
   else
-    h0 = 1.0e-16*sqrt(GV%H_to_Z*Kddt) + dz_neglect
+    h0 = 1.0e-16*sqrt(GV%H_to_m*US%m_to_Z*Kddt) + dz_neglect
     do i=is,ie
       mix(i,2) = kap_dt_x2 / ((dz(i,1)+dz(i,2)) + h0)
 
