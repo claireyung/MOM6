@@ -565,6 +565,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                                         dB_dT * (dT_ustar * I_Gam_T**2)) - 1.0
                 ! This is Newton's method without any bounds.  Should bounds be needed?
                 wB_flux_new = wB_flux - (wB_flux_new - wB_flux) / dDwB_dwB_in
+                ! Update wB_flux
+                wB_flux = wB_flux_new
               enddo !it3
             endif
 
