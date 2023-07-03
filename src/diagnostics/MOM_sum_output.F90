@@ -510,24 +510,18 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
     do k=1,nz ; vol_lay(k) = (US%m_to_L**2*GV%H_to_Z/GV%H_to_kg_m2)*mass_lay(k) ; enddo
   else
     tmp1(:,:,:) = 0.0
-    if (CS%do_APE_calc) then
-      do k=1,nz ; do j=js,je ; do i=is,ie
-        tmp1(i,j,k) = HL2_to_kg * h(i,j,k) * areaTm(i,j)
-      enddo ; enddo ; enddo
-      mass_tot = reproducing_sum(tmp1, isr, ier, jsr, jer, sums=mass_lay, EFP_sum=mass_EFP)
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      tmp1(i,j,k) = HL2_to_kg * h(i,j,k) * areaTm(i,j)
+    enddo ; enddo ; enddo
+    mass_tot = reproducing_sum(tmp1, isr, ier, jsr, jer, sums=mass_lay, EFP_sum=mass_EFP)
 
+    if (CS%do_APE_calc) then
       call find_eta(h, tv, G, GV, US, eta, dZref=G%Z_ref)
       do k=1,nz ; do j=js,je ; do i=is,ie
         tmp1(i,j,k) = US%Z_to_m*US%L_to_m**2*(eta(i,j,K)-eta(i,j,K+1)) * areaTm(i,j)
       enddo ; enddo ; enddo
       vol_tot = reproducing_sum(tmp1, isr, ier, jsr, jer, sums=vol_lay)
       do k=1,nz ; vol_lay(k) = US%m_to_Z*US%m_to_L**2 * vol_lay(k) ; enddo
-    else
-      do k=1,nz ; do j=js,je ; do i=is,ie
-        tmp1(i,j,k) = HL2_to_kg * h(i,j,k) * areaTm(i,j)
-      enddo ; enddo ; enddo
-      mass_tot = reproducing_sum(tmp1, isr, ier, jsr, jer, sums=mass_lay, EFP_sum=mass_EFP)
-      do k=1,nz ; vol_lay(k) = US%m_to_Z*US%m_to_L**2*US%kg_m3_to_R * (mass_lay(k) / GV%Rho0) ; enddo
     endif
   endif ! Boussinesq
 
