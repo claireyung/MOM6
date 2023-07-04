@@ -438,8 +438,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   if (allocated(visc%Ray_v)) visc%Ray_v(:,:,:) = 0.0
 
   !$OMP parallel do default(private) shared(u,v,h,tv,visc,G,GV,US,CS,Rml,nz,nkmb,nkml,K2, &
-  !$OMP                                     Isq,Ieq,Jsq,Jeq,h_neglect,Rho0x400_G,C2pi_3,U_bg_sq, &
-  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,cdrag_sqrt_H_RL, &
+  !$OMP                                     Isq,Ieq,Jsq,Jeq,h_neglect,dz_neglect,Rho0x400_G,C2pi_3, &
+  !$OMP                                     U_bg_sq,cdrag_sqrt,cdrag_sqrt_H,cdrag_sqrt_H_RL, &
   !$OMP                                     cdrag_L_to_H,cdrag_RL_to_H,use_BBL_EOS,BBL_thick_max, &
   !$OMP                                     OBC,maxitt,D_u,D_v,mask_u,mask_v,pbv) &
   !$OMP                              firstprivate(Vol_quit)
@@ -1519,8 +1519,9 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   enddo ; endif
 
   !$OMP parallel do default(private) shared(u,v,h,tv,forces,visc,dt,G,GV,US,CS,use_EOS,dt_Rho0, &
-  !$OMP                                     h_neglect,h_tiny,g_H_Rho0,js,je,OBC,Isq,Ieq,nz,  &
-  !$OMP                                     U_bg_sq,mask_v,cdrag_sqrt,cdrag_sqrt_H,Rho0x400_G,nkml)
+  !$OMP                                     nonBous_ML,h_neglect,dz_neglect,h_tiny,g_H_Rho0, &
+  !$OMP                                     js,je,OBC,Isq,Ieq,nz,nkml,U_bg_sq,mask_v,tau_scale, &
+  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,Rho0x400_G,rho0_sc)
   do j=js,je  ! u-point loop
     if (CS%dynamic_viscous_ML) then
       do_any = .false.
