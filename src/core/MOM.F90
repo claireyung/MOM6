@@ -2345,14 +2345,16 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                  default=99991231)
   call get_param(param_file, "MOM", "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
-                 default=(default_answer_date<20190101))
+                 default=(default_answer_date<20190101), do_not_log=non_Bous)
   call get_param(param_file, "MOM", "SURFACE_2018_ANSWERS", answers_2018, &
                  "If true, use expressions for the surface properties that recover the answers "//&
                  "from the end of 2018. Otherwise, use more appropriate expressions that differ "//&
-                 "at roundoff for non-Boussinesq cases.", default=default_2018_answers)
+                 "at roundoff for non-Boussinesq cases.", default=default_2018_answers, do_not_log=non_Bous)
   ! Revise inconsistent default answer dates.
-  if (answers_2018 .and. (default_answer_date >= 20190101)) default_answer_date = 20181231
-  if (.not.answers_2018 .and. (default_answer_date < 20190101)) default_answer_date = 20190101
+  if (.not.non_Bous) then
+    if (answers_2018 .and. (default_answer_date >= 20190101)) default_answer_date = 20181231
+    if (.not.answers_2018 .and. (default_answer_date < 20190101)) default_answer_date = 20190101
+  endif
   call get_param(param_file, "MOM", "SURFACE_ANSWER_DATE", CS%answer_date, &
                "The vintage of the expressions for the surface properties.  Values below "//&
                "20190101 recover the answers from the end of 2018, while higher values "//&
@@ -3047,7 +3049,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   endif
 
   if (CS%use_porbar) &
-    call porous_barriers_init(Time, US, param_file, diag, CS%por_bar_CS)
+    call porous_barriers_init(Time, GV, US, param_file, diag, CS%por_bar_CS)
 
   if (CS%split) then
     allocate(eta(SZI_(G),SZJ_(G)), source=0.0)
