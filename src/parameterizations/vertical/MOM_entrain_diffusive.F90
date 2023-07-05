@@ -391,9 +391,16 @@ subroutine entrainment_diffusive(h, tv, fluxes, dt, G, GV, US, CS, ea, eb, &
         maxF(i,1) = 0.0
         htot(i) = h(i,j,1) - Angstrom
       enddo
-      if (associated(fluxes%buoy)) then ; do i=is,ie
-        maxF(i,1) = GV%Z_to_H * (dt*fluxes%buoy(i,j)) / GV%g_prime(2)
-      enddo ; endif
+      if (associated(fluxes%buoy) .and. GV%Boussinesq) then
+        do i=is,ie
+          maxF(i,1) = GV%Z_to_H * (dt*fluxes%buoy(i,j)) / GV%g_prime(2)
+        enddo
+      elseif (associated(fluxes%buoy)) then
+        do i=is,ie
+          maxF(i,1) = (GV%RZ_to_H * 0.5*(GV%Rlay(1) + GV%Rlay(2)) * (dt*fluxes%buoy(i,j))) / &
+                      GV%g_prime(2)
+        enddo
+      endif
     endif
 
 ! The following code calculates the maximum flux, maxF, for the interior
