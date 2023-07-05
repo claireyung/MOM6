@@ -2379,7 +2379,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  default=.false.)
   call get_param(param_file, mdl, "KD_GL90", CS%kappa_gl90, &
                  "The scalar diffusivity used in GL90 vertical viscosity scheme.", &
-                 units="m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s*GV%Z_to_H, &
+                 units="m2 s-1", default=0.0, scale=US%m_to_L*US%Z_to_L*GV%m_to_H*US%T_to_s, &
                  do_not_log=.not.CS%use_GL90_in_SSW)
   call get_param(param_file, mdl, "READ_KD_GL90", CS%read_kappa_gl90, &
                  "If true, read a file (given by KD_GL90_FILE) containing the "//&
@@ -2404,7 +2404,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
 
     allocate(CS%kappa_gl90_2d(G%isd:G%ied, G%jsd:G%jed), source=0.0)
     call MOM_read_data(kappa_gl90_file, kdgl90_varname, CS%kappa_gl90_2d(:,:), G%domain, &
-                       scale=US%m_to_L**2*US%T_to_s*GV%Z_to_H)
+                       scale=US%m_to_L*US%Z_to_L*GV%m_to_H*US%T_to_s)
     call pass_var(CS%kappa_gl90_2d, G%domain)
   endif
   call get_param(param_file, mdl, "USE_GL90_N2", CS%use_GL90_N2, &
@@ -2551,16 +2551,16 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
       'Slow varying vertical viscosity', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
 
   CS%id_Kv_u = register_diag_field('ocean_model', 'Kv_u', diag%axesCuL, Time, &
-      'Total vertical viscosity at u-points', 'm2 s-1', conversion=GV%H_to_Z*GV%HZ_T_to_m2_s)
+      'Total vertical viscosity at u-points', 'm2 s-1', conversion=GV%H_to_m**2*US%s_to_T)
 
   CS%id_Kv_v = register_diag_field('ocean_model', 'Kv_v', diag%axesCvL, Time, &
-      'Total vertical viscosity at v-points', 'm2 s-1', conversion=GV%H_to_Z*GV%HZ_T_to_m2_s)
+      'Total vertical viscosity at v-points', 'm2 s-1', conversion=GV%H_to_m**2*US%s_to_T)
 
   CS%id_Kv_gl90_u = register_diag_field('ocean_model', 'Kv_gl90_u', diag%axesCuL, Time, &
-      'GL90 vertical viscosity at u-points', 'm2 s-1', conversion=GV%H_to_Z*GV%HZ_T_to_m2_s)
+      'GL90 vertical viscosity at u-points', 'm2 s-1', conversion=GV%H_to_m**2*US%s_to_T)
 
   CS%id_Kv_gl90_v = register_diag_field('ocean_model', 'Kv_gl90_v', diag%axesCvL, Time, &
-      'GL90 vertical viscosity at v-points', 'm2 s-1', conversion=GV%H_to_Z*GV%HZ_T_to_m2_s)
+      'GL90 vertical viscosity at v-points', 'm2 s-1', conversion=GV%H_to_m**2*US%s_to_T)
 
   CS%id_au_vv = register_diag_field('ocean_model', 'au_visc', diag%axesCui, Time, &
       'Zonal Viscous Vertical Coupling Coefficient', 'm s-1', conversion=GV%H_to_m*US%s_to_T)
