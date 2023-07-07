@@ -457,6 +457,12 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
   if (CS%debug) then
     call uvchksum("Kh_[uv]", Kh_u, Kh_v, G%HI, haloshift=0, &
                   scale=(US%L_to_m**2)*US%s_to_T, scalar_pair=.true.)
+    call uvchksum("Kh_[uv]_CFL", Kh_u_CFL, Kh_v_CFL, G%HI, haloshift=0, &
+                  scale=(US%L_to_m**2)*US%s_to_T, scalar_pair=.true.)
+    if (Resoln_scaled) then
+      call uvchksum("Res_fn_[uv]", VarMix%Res_fn_u, VarMix%Res_fn_v, G%HI, haloshift=0, &
+                    scale=1.0, scalar_pair=.true.)
+    endif
     call uvchksum("int_slope_[uv]", int_slope_u, int_slope_v, G%HI, haloshift=0)
     call hchksum(h, "thickness_diffuse_1 h", G%HI, haloshift=1, scale=GV%H_to_m)
     call hchksum(e, "thickness_diffuse_1 e", G%HI, haloshift=1, scale=US%Z_to_m)
@@ -742,6 +748,8 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
   real :: mn_T2         ! mean of T**2 in local stencil [C2 ~> degC2]
   real :: hl(5)         ! Copy of local stencil of H [H ~> m]
   real :: r_sm_H        ! Reciprocal of sum of H in local stencil [H-1 ~> m-1]
+  real :: Z_to_H        ! A conversion factor from heights to thicknesses, perhaps based on
+                        ! a spatially variable local density [H Z-1 ~> nondim or kg m-3]
   real :: Tsgs2(SZI_(G),SZJ_(G),SZK_(GV)) ! Sub-grid temperature variance [C2 ~> degC2]
   real :: diag_sfn_x(SZIB_(G),SZJ_(G),SZK_(GV)+1)       ! Diagnostic of the x-face streamfunction
                                                         ! [H L2 T-1 ~> m3 s-1 or kg s-1]
@@ -1060,10 +1068,14 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
     do K=nz,2,-1
       do I=is-1,ie
 
-        if ((use_EOS .and. allocated(tv%SpV_avg)) .and. (find_work .or. (k > nk_linear)) ) then
+        if (allocated(tv%SpV_avg) .and. (find_work .or. (k > nk_linear)) ) then
           Rho_avg = ( ((h(i,j,k) + h(i,j,k-1)) + (h(i+1,j,k) + h(i+1,j,k-1))) + 4.0*hn_2 ) / &
                 ( ((h(i,j,k)+hn_2) * tv%SpV_avg(i,j,k)   + (h(i,j,k-1)+hn_2) * tv%SpV_avg(i,j,k-1)) + &
                   ((h(i+1,j,k)+hn_2)*tv%SpV_avg(i+1,j,k) + (h(i+1,j,k-1)+hn_2)*tv%SpV_avg(i+1,j,k-1)) )
+          ! Use an average density to convert the volume streamfunction estimate into a mass streamfunction.
+          Z_to_H = (GV%RZ_to_H*Rho_avg)
+        else
+          Z_to_H = GV%Z_to_H
         endif
 
         if (k > nk_linear) then
@@ -1077,15 +1089,9 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
             endif
 
             ! Determine the actual streamfunction at each interface.
-            if (allocated(tv%SpV_avg)) then
-              ! Use an average density to convert the volume streamfunction estimate into a mass streamfunction.
-              Sfn_est = ((GV%RZ_to_H*Rho_avg)*Sfn_unlim_u(I,K) + slope2_Ratio_u(I,K)*Sfn_safe) / &
-                        (1.0 + slope2_Ratio_u(I,K))
-            else
-              Sfn_est = (GV%Z_to_H*Sfn_unlim_u(I,K) + slope2_Ratio_u(I,K)*Sfn_safe) / (1.0 + slope2_Ratio_u(I,K))
-            endif
-          else  ! With .not.use_EOS, the layers are constant density.
-            Sfn_est = GV%Z_to_H*Sfn_unlim_u(I,K)
+            Sfn_est = (Z_to_H*Sfn_unlim_u(I,K) + slope2_Ratio_u(I,K)*Sfn_safe) / (1.0 + slope2_Ratio_u(I,K))
+          else  ! When use_EOS is false, the layers are constant density.
+            Sfn_est = Z_to_H*Sfn_unlim_u(I,K)
           endif
 
           ! Make sure that there is enough mass above to allow the streamfunction
@@ -1133,7 +1139,7 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
           !   A second order centered estimate is used for the density transferred
           ! between water columns.
 
-          if (use_EOS .and. allocated(tv%SpV_avg)) then
+          if (allocated(tv%SpV_avg)) then
             G_scale = GV%H_to_RZ * GV%g_Earth / Rho_avg
           else
             G_scale = GV%g_Earth * GV%H_to_Z
@@ -1375,10 +1381,14 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
 
     do K=nz,2,-1
       do i=is,ie
-        if ((use_EOS .and. allocated(tv%SpV_avg)) .and. (find_work .or. (k > nk_linear)) ) then
+        if (allocated(tv%SpV_avg) .and. (find_work .or. (k > nk_linear)) ) then
           Rho_avg = ( ((h(i,j,k) + h(i,j,k-1)) + (h(i,j+1,k) + h(i,j+1,k-1))) + 4.0*hn_2 ) / &
               ( ((h(i,j,k)+hn_2) * tv%SpV_avg(i,j,k)   + (h(i,j,k-1)+hn_2) * tv%SpV_avg(i,j,k-1)) + &
                 ((h(i,j+1,k)+hn_2)*tv%SpV_avg(i,j+1,k) + (h(i,j+1,k-1)+hn_2)*tv%SpV_avg(i,j+1,k-1)) )
+          ! Use an average density to convert the volume streamfunction estimate into a mass streamfunction.
+          Z_to_H = (GV%RZ_to_H*Rho_avg)
+        else
+          Z_to_H = GV%Z_to_H
         endif
 
         if (k > nk_linear) then
@@ -1392,15 +1402,9 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
             endif
 
             ! Find the actual streamfunction at each interface.
-            if (allocated(tv%SpV_avg)) then
-              ! Use an average density to convert the volume streamfunction estimate into a mass streamfunction.
-              Sfn_est = ((GV%RZ_to_H*Rho_avg)*Sfn_unlim_v(i,K) + slope2_Ratio_v(i,K)*Sfn_safe) / &
-                        (1.0 + slope2_Ratio_v(i,K))
-            else
-              Sfn_est = (GV%Z_to_H*Sfn_unlim_v(i,K) + slope2_Ratio_v(i,K)*Sfn_safe) / (1.0 + slope2_Ratio_v(i,K))
-            endif
-          else      ! With .not.use_EOS, the layers are constant density.
-            Sfn_est = GV%Z_to_H*Sfn_unlim_v(i,K)
+            Sfn_est = (Z_to_H*Sfn_unlim_v(i,K) + slope2_Ratio_v(i,K)*Sfn_safe) / (1.0 + slope2_Ratio_v(i,K))
+          else  ! When use_EOS is false, the layers are constant density.
+            Sfn_est = Z_to_H*Sfn_unlim_v(i,K)
           endif
 
           ! Make sure that there is enough mass above to allow the streamfunction
@@ -1446,7 +1450,7 @@ subroutine thickness_diffuse_full(h, e, Kh_u, Kh_v, tv, uhD, vhD, cg1, dt, G, GV
           !   A second order centered estimate is used for the density transferred
           ! between water columns.
 
-          if (use_EOS .and. allocated(tv%SpV_avg)) then
+          if (allocated(tv%SpV_avg)) then
             G_scale = GV%H_to_RZ * GV%g_Earth / Rho_avg
           else
             G_scale = GV%g_Earth * GV%H_to_Z
