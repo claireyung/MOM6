@@ -360,10 +360,13 @@ subroutine find_rho_bottom(h, dz, pres_int, dz_avg, tv, j, G, GV, US, Rho_bot)
                               ! top of the boundary layer [R-1 ~> m3 kg-1]
   real :: frac_in             ! The fraction of a layer that is within the bottom boundary layer [nondim]
   logical :: do_i(SZI_(G)), do_any
+  logical :: use_EOS
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: i, k, is, ie, nz
 
   is = G%isc ; ie = G%iec ; nz = GV%ke
+
+  use_EOS = associated(tv%T) .and. associated(tv%S) .and. associated(tv%eqn_of_state)
 
   if (GV%Boussinesq .or. GV%semi_Boussinesq .or. .not.allocated(tv%SpV_avg)) then
     do i=is,ie
@@ -384,6 +387,7 @@ subroutine find_rho_bottom(h, dz, pres_int, dz_avg, tv, j, G, GV, US, Rho_bot)
       if (G%mask2dT(i,j) <= 0.0) then
         ! Set acceptable values for calling the equation of state over land.
         T_bbl(i) = 0.0 ; S_bbl(i) = 0.0 ; dp(i) = 0.0 ; P_bbl(i) = 0.0
+        SpV_bbl(i) = 1.0 ! This value is arbitrary, provided it is non-zero.
         h_bbl_frac(i) = 0.0
         do_i(i) = .false.
       endif
@@ -404,11 +408,15 @@ subroutine find_rho_bottom(h, dz, pres_int, dz_avg, tv, j, G, GV, US, Rho_bot)
           else
             frac_in = 0.0
           endif
-          ! Store the properties of this layer to determine the average specific volume of the
-          ! portion that is within the BBL.
-          T_bbl(i) = tv%T(i,j,k) ; S_bbl(i) = tv%S(i,j,k)
-          dp(i) = frac_in * (GV%g_Earth*GV%H_to_RZ * h(i,j,k))
-          P_bbl(i) = pres_int(i,K) + (1.0-frac_in) * (GV%g_Earth*GV%H_to_RZ * h(i,j,k))
+          if (use_EOS) then
+            ! Store the properties of this layer to determine the average
+            ! specific volume of the portion that is within the BBL.
+            T_bbl(i) = tv%T(i,j,k) ; S_bbl(i) = tv%S(i,j,k)
+            dp(i) = frac_in * (GV%g_Earth*GV%H_to_RZ * h(i,j,k))
+            P_bbl(i) = pres_int(i,K) + (1.0-frac_in) * (GV%g_Earth*GV%H_to_RZ * h(i,j,k))
+          else
+            SpV_bbl(i) = tv%SpV_avg(i,j,k)
+          endif
           h_bbl_frac(i) = frac_in * h(i,j,k)
           dz_bbl_rem(i) = 0.0
           do_i(i) = .false.
@@ -420,15 +428,21 @@ subroutine find_rho_bottom(h, dz, pres_int, dz_avg, tv, j, G, GV, US, Rho_bot)
       ! The nominal bottom boundary layer is thicker than the water column, but layer 1 is
       ! already included in the averages.  These values are set so that the call to find
       ! the layer-average specific volume will behave sensibly.
-      T_bbl(i) = tv%T(i,j,1) ; S_bbl(i) = tv%S(i,j,1)
-      dp(i) = 0.0
-      P_bbl(i) = pres_int(i,1)
+      if (use_EOS) then
+        T_bbl(i) = tv%T(i,j,1) ; S_bbl(i) = tv%S(i,j,1)
+        dp(i) = 0.0
+        P_bbl(i) = pres_int(i,1)
+      else
+        SpV_bbl(i) = tv%SpV_avg(i,j,1)
+      endif
       h_bbl_frac(i) = 0.0
     endif ; enddo
 
-    ! Find the average specific volume of the fractional layer atop the BBL.
-    EOSdom(:) = EOS_domain(G%HI)
-    call average_specific_vol(T_bbl, S_bbl, P_bbl, dp, SpV_bbl, tv%eqn_of_state, EOSdom)
+    if (use_EOS) then
+      ! Find the average specific volume of the fractional layer atop the BBL.
+      EOSdom(:) = EOS_domain(G%HI)
+      call average_specific_vol(T_bbl, S_bbl, P_bbl, dp, SpV_bbl, tv%eqn_of_state, EOSdom)
+    endif
 
     do i=is,ie
       if (hb(i) + h_bbl_frac(i) < GV%H_subroundoff) h_bbl_frac(i) = GV%H_subroundoff
