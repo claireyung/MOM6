@@ -159,7 +159,8 @@ subroutine Calculate_kappa_shear(u_in, v_in, h, tv, p_surf, kappa_io, tke_io, &
     dz_lay, &   ! The geometric layer thickness in height units [Z ~> m]
     u0xdz, &    ! The initial zonal velocity times dz [H L T-1 ~> m2 s-1 or kg m-1 s-1]
     v0xdz, &    ! The initial meridional velocity times dz [H L T-1 ~> m2 s-1 or kg m-1 s-1]
-    T0xdz, &    ! The initial temperature times dz [C H ~> degC m or degC kg m-2].
+    T0xdz, &    ! The initial temperature times thickness [C H ~> degC m or degC kg m-2] or if
+                ! temperature is not a state variable, the density times thickness [R H ~> kg m-2 or kg2 m-3]
     S0xdz       ! The initial salinity times dz [S H ~> ppt m or ppt kg m-2].
   real, dimension(SZK_(GV)+1) :: &
     kappa, &    ! The shear-driven diapycnal diffusivity at an interface [H Z T-1 ~> m2 s-1 or Pa s]
@@ -894,8 +895,15 @@ subroutine kappa_shear_column(kappa, tke, dt, nzc, f2, surface_pres, hlay, dz_la
         dbuoy_dS(K) = (US%L_to_Z**2 * GV%g_Earth) * (rho_int(K) * dSpV_dS(K))
       enddo
     endif
-  else
+  elseif (GV%Boussinesq .or. GV%semi_Boussinesq) then
     do K=1,nzc+1 ; dbuoy_dT(K) = -g_R0 ; dbuoy_dS(K) = 0.0 ; enddo
+  else
+    do K=1,nzc+1 ; dbuoy_dS(K) = 0.0 ; enddo
+    dbuoy_dT(1) = -(US%L_to_Z**2 * GV%g_Earth) / GV%Rlay(1)
+    do K=1,nzc+1
+      dbuoy_dT(K) = -(US%L_to_Z**2 * GV%g_Earth) / (0.5*(GV%Rlay(k-1) + GV%Rlay(k)))
+    enddo
+    dbuoy_dT(nzc+1) = -(US%L_to_Z**2 * GV%g_Earth) / GV%Rlay(nzc)
   endif
 
   ! N2_debug(1) = 0.0 ; N2_debug(nzc+1) = 0.0
