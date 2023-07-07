@@ -454,6 +454,12 @@ subroutine calc_resoln_function(h, tv, G, GV, US, CS)
     if (CS%id_Res_fn > 0) call post_data(CS%id_Res_fn, CS%Res_fn_h, CS%diag)
   endif
 
+  if (CS%debug) then
+    call hchksum(CS%cg1, "calc_resoln_fn cg1", G%HI, haloshift=1, scale=US%L_T_to_m_s)
+    call uvchksum("Res_fn_[uv]", CS%Res_fn_u, CS%Res_fn_v, G%HI, haloshift=0, &
+                  scale=1.0, scalar_pair=.true.)
+  endif
+
 end subroutine calc_resoln_function
 
 !> Calculates and stores functions of isopycnal slopes, e.g. Sx, Sy, S*N, mostly used in the Visbeck et al.
