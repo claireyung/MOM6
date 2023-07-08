@@ -513,6 +513,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
                                                    ! various unit conversion factors
   integer       :: ntstep ! time steps between tracer updates or diabatic forcing
   integer       :: n_max  ! number of steps to take in this call
+  integer :: halo_sz, dynamics_stencil
 
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
@@ -535,6 +536,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
                                        ! multiple dynamic timesteps.
   logical :: do_dyn     ! If true, dynamics are updated with this call.
   logical :: do_thermo  ! If true, thermodynamics and remapping may be applied with this call.
+  logical :: nonblocking_p_surf_update ! A flag to indicate whether surface properties
+                        ! can use nonblocking halo updates
   logical :: cycle_start ! If true, do calculations that are only done at the start of
                         ! a stepping cycle (whatever that may mean).
   logical :: cycle_end  ! If true, do calculations and diagnostics that are only done at
@@ -641,13 +644,11 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       dt_therm = dt*ntstep
     endif
 
-    if (associated(forces%p_surf)) p_surf => forces%p_surf
-    if (.not.associated(forces%p_surf)) CS%interp_p_surf = .false.
-    CS%tv%p_surf => NULL()
-    if (CS%use_p_surf_in_EOS .and. associated(forces%p_surf)) CS%tv%p_surf => forces%p_surf
-
     !---------- Initiate group halo pass of the forcing fields
     call cpu_clock_begin(id_clock_pass)
+    nonblocking_p_surf_update = G%nonblocking_updates .and. &
+        .not.(CS%use_p_surf_in_EOS .and. associated(forces%p_surf) .and. &
+              allocated(CS%tv%SpV_avg) .and. associated(CS%tv%T))
     if (.not.associated(forces%taux) .or. .not.associated(forces%tauy)) &
          call MOM_error(FATAL,'step_MOM:forces%taux,tauy not associated')
     call create_group_pass(pass_tau_ustar_psurf, forces%taux, forces%tauy, G%Domain)
@@ -657,12 +658,26 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       call create_group_pass(pass_tau_ustar_psurf, forces%tau_mag, G%Domain)
     if (associated(forces%p_surf)) &
       call create_group_pass(pass_tau_ustar_psurf, forces%p_surf, G%Domain)
-    if (G%nonblocking_updates) then
+    if (nonblocking_p_surf_update) then
       call start_group_pass(pass_tau_ustar_psurf, G%Domain)
     else
       call do_group_pass(pass_tau_ustar_psurf, G%Domain)
     endif
     call cpu_clock_end(id_clock_pass)
+
+    if (associated(forces%p_surf)) p_surf => forces%p_surf
+    if (.not.associated(forces%p_surf)) CS%interp_p_surf = .false.
+    CS%tv%p_surf => NULL()
+    if (CS%use_p_surf_in_EOS .and. associated(forces%p_surf)) then
+      CS%tv%p_surf => forces%p_surf
+
+      if (allocated(CS%tv%SpV_avg) .and. associated(CS%tv%T)) then
+        ! The internal ocean state depends on the surface pressues, so update SpV_avg.
+        dynamics_stencil = min(3, G%Domain%nihalo, G%Domain%njhalo)
+        call calc_derived_thermo(CS%tv, h, G, GV, US, halo=dynamics_stencil, debug=CS%debug)
+      endif
+    endif
+
   else
     ! This step only updates the thermodynamics so setting timesteps is simpler.
     n_max = 1
@@ -671,13 +686,21 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
 
     dt = time_interval / real(n_max)
     dt_therm = dt ; ntstep = 1
+
+    if (CS%UseWaves) call pass_var(fluxes%ustar, G%Domain, clock=id_clock_pass)
+
     if (associated(fluxes%p_surf)) p_surf => fluxes%p_surf
     CS%tv%p_surf => NULL()
     if (CS%use_p_surf_in_EOS .and. associated(fluxes%p_surf)) then
       CS%tv%p_surf => fluxes%p_surf
-      if (allocated(CS%tv%SpV_avg)) call pass_var(fluxes%p_surf, G%Domain, clock=id_clock_pass)
+      if (allocated(CS%tv%SpV_avg)) then
+        call pass_var(fluxes%p_surf, G%Domain, clock=id_clock_pass)
+        ! The internal ocean state depends on the surface pressues, so update SpV_avg.
+        call extract_diabatic_member(CS%diabatic_CSp, diabatic_halo=halo_sz)
+        halo_sz = max(halo_sz, 1)
+        call calc_derived_thermo(CS%tv, h, G, GV, US, halo=halo_sz, debug=CS%debug)
+      endif
     endif
-    if (CS%UseWaves) call pass_var(fluxes%ustar, G%Domain, clock=id_clock_pass)
   endif
 
   if (therm_reset) then
@@ -703,7 +726,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   if (CS%stoch_CS%do_sppt .OR. CS%stoch_CS%pert_epbl) call update_stochastics(CS%stoch_CS)
 
   if (do_dyn) then
-    if (G%nonblocking_updates) &
+    if (nonblocking_p_surf_update) &
       call complete_group_pass(pass_tau_ustar_psurf, G%Domain, clock=id_clock_pass)
 
     if (CS%interp_p_surf) then
