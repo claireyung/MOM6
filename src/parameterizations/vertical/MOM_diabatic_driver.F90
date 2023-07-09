@@ -12,7 +12,7 @@ use MOM_CVMix_shear,         only : CVMix_shear_is_used
 use MOM_CVMix_ddiff,         only : CVMix_ddiff_is_used
 use MOM_diabatic_aux,        only : diabatic_aux_init, diabatic_aux_end, diabatic_aux_CS
 use MOM_diabatic_aux,        only : make_frazil, adjust_salt, differential_diffuse_T_S, triDiagTS
-use MOM_diabatic_aux,        only : triDiagTS_Eulerian, find_uv_at_h, find_ustar
+use MOM_diabatic_aux,        only : triDiagTS_Eulerian, find_uv_at_h
 use MOM_diabatic_aux,        only : applyBoundaryFluxesInOut, set_pen_shortwave
 use MOM_diabatic_aux,        only : diagnoseMLDbyDensityDifference, diagnoseMLDbyEnergy
 use MOM_diag_mediator,       only : post_data, register_diag_field, safe_alloc_ptr
@@ -37,7 +37,7 @@ use MOM_EOS,                 only : calculate_density, calculate_TFreeze, EOS_do
 use MOM_error_handler,       only : MOM_error, FATAL, WARNING, callTree_showQuery,MOM_mesg
 use MOM_error_handler,       only : callTree_enter, callTree_leave, callTree_waypoint
 use MOM_file_parser,         only : get_param, log_version, param_file_type, read_param
-use MOM_forcing_type,        only : forcing, MOM_forcing_chksum
+use MOM_forcing_type,        only : forcing, MOM_forcing_chksum, find_ustar
 use MOM_forcing_type,        only : calculateBuoyancyFlux2d, forcing_SinglePointPrint
 use MOM_geothermal,          only : geothermal_entraining, geothermal_in_place
 use MOM_geothermal,          only : geothermal_init, geothermal_end, geothermal_CS

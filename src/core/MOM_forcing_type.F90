@@ -29,7 +29,7 @@ implicit none ; private
 
 public extractFluxes1d, extractFluxes2d, optics_type
 public MOM_forcing_chksum, MOM_mech_forcing_chksum
-public calculateBuoyancyFlux1d, calculateBuoyancyFlux2d
+public calculateBuoyancyFlux1d, calculateBuoyancyFlux2d, find_ustar
 public forcing_accumulate, fluxes_accumulate
 public forcing_SinglePointPrint, mech_forcing_diags, forcing_diagnostics
 public register_forcing_type_diags, allocate_forcing_type, deallocate_forcing_type
@@ -52,6 +52,12 @@ interface allocate_mech_forcing
   module procedure allocate_mech_forcing_by_group
   module procedure allocate_mech_forcing_from_ref
 end interface allocate_mech_forcing
+
+!> Determine the friction velocity from a forcing type or a mechanical forcing type.
+interface find_ustar
+  module procedure find_ustar_fluxes
+  module procedure find_ustar_mech_forcing
+end interface find_ustar
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -1103,6 +1109,99 @@ subroutine calculateBuoyancyFlux2d(G, GV, US, fluxes, optics, h, Temp, Salt, tv,
   enddo
 
 end subroutine calculateBuoyancyFlux2d
+
+
+
+!> Determine the friction velocity from the contenxts of a forcing type, perhaps
+!! using the evolving surface density.
+subroutine find_ustar_fluxes(fluxes, tv, U_star, G, GV, US, halo)
+  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
+  type(forcing),           intent(in)  :: fluxes !< Surface fluxes container
+  type(thermo_var_ptrs),   intent(in)  :: tv   !< Structure containing pointers to any
+                                               !! available thermodynamic fields.
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(out) :: U_star !< The surface friction velocity [Z T-1 ~> m s-1]
+  integer,       optional, intent(in)  :: halo !< The extra halo size to fill in, 0 by default
+
+  ! Local variables
+  real :: I_rho        ! The inverse of the reference density times a ratio of scaling
+                       ! factors [Z L-1 R-1 ~> m3 kg-1]
+  integer :: i, j, k, is, ie, js, je, hs
+
+  hs = 0 ; if (present(halo)) hs = max(halo, 0)
+  is = G%isc - hs ; ie = G%iec + hs ; js = G%jsc - hs ; je = G%jec + hs
+
+  if (.not.(associated(fluxes%ustar) .or. associated(fluxes%tau_mag))) &
+    call MOM_error(FATAL, "find_ustar_fluxes requires that either ustar or tau_mag be associated.")
+
+  if (associated(fluxes%ustar) .and. (GV%Boussinesq .or. .not.associated(fluxes%tau_mag))) then
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = fluxes%ustar(i,j)
+    enddo ; enddo
+  elseif (allocated(tv%SpV_avg)) then
+    if (tv%valid_SpV_halo < 0) call MOM_error(FATAL, &
+        "find_ustar_fluxes called in non-Boussinesq mode with invalid values of SpV_avg.")
+    if (tv%valid_SpV_halo < hs) call MOM_error(FATAL, &
+        "find_ustar_fluxes called in non-Boussinesq mode with insufficient valid values of SpV_avg.")
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+    enddo ; enddo
+  else
+    I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = sqrt(fluxes%tau_mag(i,j) * I_rho)
+    enddo ; enddo
+  endif
+
+end subroutine find_ustar_fluxes
+
+
+!> Determine the friction velocity from the contenxts of a forcing type, perhaps
+!! using the evolving surface density.
+subroutine find_ustar_mech_forcing(forces, tv, U_star, G, GV, US, halo)
+  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
+  type(mech_forcing),      intent(in)  :: forces !< Surface forces container
+  type(thermo_var_ptrs),   intent(in)  :: tv   !< Structure containing pointers to any
+                                               !! available thermodynamic fields.
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(out) :: U_star !< The surface friction velocity [Z T-1 ~> m s-1]
+  integer,       optional, intent(in)  :: halo !< The extra halo size to fill in, 0 by default
+
+  ! Local variables
+  real :: I_rho        ! The inverse of the reference density times a ratio of scaling
+                       ! factors [Z L-1 R-1 ~> m3 kg-1]
+  integer :: i, j, k, is, ie, js, je, hs
+
+  hs = 0 ; if (present(halo)) hs = max(halo, 0)
+  is = G%isc - hs ; ie = G%iec + hs ; js = G%jsc - hs ; je = G%jec + hs
+
+  if (.not.(associated(forces%ustar) .or. associated(forces%tau_mag))) &
+    call MOM_error(FATAL, "find_ustar_mech requires that either ustar or tau_mag be associated.")
+
+  if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = forces%ustar(i,j)
+    enddo ; enddo
+  elseif (allocated(tv%SpV_avg)) then
+    if (tv%valid_SpV_halo < 0) call MOM_error(FATAL, &
+        "find_ustar_mech called in non-Boussinesq mode with invalid values of SpV_avg.")
+    if (tv%valid_SpV_halo < hs) call MOM_error(FATAL, &
+        "find_ustar_mech called in non-Boussinesq mode with insufficient valid values of SpV_avg.")
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+    enddo ; enddo
+  else
+    I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+    do j=js,je ; do i=is,ie
+      U_star(i,j) = sqrt(forces%tau_mag(i,j) * I_rho)
+    enddo ; enddo
+  endif
+
+end subroutine find_ustar_mech_forcing
 
 
 !> Write out chksums for thermodynamic fluxes.
@@ -3653,6 +3752,7 @@ subroutine homogenize_mech_forcing(forces, G, US, Rho0, UpdateUstar)
                                                  !! or updated from mean tau.
 
   real :: tx_mean, ty_mean ! Mean wind stresses [R L Z T-2 ~> Pa]
+  real :: tau_mag      ! The magnitude of the wind stresses [R L Z T-2 ~> Pa]
   real :: Irho0        ! Inverse of the mean density rescaled to [Z L-1 R-1 ~> m3 kg-1]
   logical :: do_stress, do_ustar, do_taumag, do_shelf, do_press, do_iceberg, tau2ustar
   integer :: i, j, is, ie, js, je, isB, ieB, jsB, jeB
@@ -3677,10 +3777,13 @@ subroutine homogenize_mech_forcing(forces, G, US, Rho0, UpdateUstar)
       if (G%mask2dCv(i,J) > 0.0) forces%tauy(i,J) = ty_mean
     enddo ; enddo
     if (tau2ustar) then
-      do j=js,je ; do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
-        forces%tau_mag(i,j) = sqrt(tx_mean**2 + ty_mean**2)
-        forces%ustar(i,j) = sqrt(forces%tau_mag(i,j) * Irho0)
-      endif ; enddo ; enddo
+      tau_mag = sqrt(tx_mean**2 + ty_mean**2)
+      if (associated(forces%tau_mag)) then ; do j=js,je ; do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
+        forces%tau_mag(i,j) = tau_mag
+      endif ; enddo ; enddo ; endif
+      if (associated(forces%ustar)) then ; do j=js,je ; do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
+        forces%ustar(i,j) = sqrt(tau_mag * Irho0)
+      endif ; enddo ; enddo ; endif
     else
       if (associated(forces%ustar)) &
         call homogenize_field_t(forces%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
