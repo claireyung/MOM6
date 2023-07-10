@@ -784,14 +784,26 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS, dt_
   ! Set the wind stresses and ustar.
   if (wt1 <= 0.0) then
     call extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, taux=forces%taux, tauy=forces%tauy, &
-                              ustar=forces%ustar, mag_tau=forces%tau_mag, tau_halo=1)
+                              tau_halo=1)
+    if (associated(forces%ustar)) &
+      call extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, ustar=forces%ustar)
+    if (associated(forces%tau_mag)) &
+      call extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, mag_tau=forces%tau_mag)
   else
     call extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, taux=forces%taux, tauy=forces%tauy, &
-                              ustar=ustar_tmp, mag_tau=tau_mag_tmp, tau_halo=1)
-    do j=js,je ; do i=is,ie
-      forces%ustar(i,j) = wt1*forces%ustar(i,j) + wt2*ustar_tmp(i,j)
-      forces%tau_mag(i,j) = wt1*forces%tau_mag(i,j) + wt2*tau_mag_tmp(i,j)
-    enddo ; enddo
+                              tau_halo=1)
+    if (associated(forces%ustar)) then
+      call extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, ustar=ustar_tmp)
+      do j=js,je ; do i=is,ie
+        forces%ustar(i,j) = wt1*forces%ustar(i,j) + wt2*ustar_tmp(i,j)
+      enddo ; enddo
+    endif
+    if (associated(forces%tau_mag)) then
+      call extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, mag_tau=tau_mag_tmp)
+      do j=js,je ; do i=is,ie
+        forces%tau_mag(i,j) = wt1*forces%tau_mag(i,j) + wt2*tau_mag_tmp(i,j)
+      enddo ; enddo
+    endif
   endif
 
   ! Find the net mass source in the input forcing without other adjustments.
@@ -952,7 +964,7 @@ subroutine extract_IOB_stresses(IOB, index_bounds, Time, G, US, CS, taux, tauy, 
 
   ! Set surface momentum stress related fields as a function of staggering.
   if (present(taux) .or. present(tauy) .or. &
-      ((do_ustar.or.do_gustless) .and. .not.associated(IOB%stress_mag)) ) then
+      ((do_ustar .or. do_tau_mag .or. do_gustless) .and. .not.associated(IOB%stress_mag)) ) then
 
     if (wind_stagger == BGRID_NE) then
       taux_in_B(:,:) = 0.0 ; tauy_in_B(:,:) = 0.0
