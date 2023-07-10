@@ -1542,7 +1542,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
             if (CS%omega_frac > 0.0) &
               absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
           endif
-          if (GV%Boussinesq) then
+          if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
             U_star = max(CS%ustar_min, 0.5*GV%Z_to_H * (forces%ustar(i,j) + forces%ustar(i+1,j)))
           elseif (allocated(tv%SpV_avg)) then
             U_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
@@ -1821,7 +1821,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
               absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
           endif
 
-          if (GV%Boussinesq) then
+          if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
             U_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
           elseif (allocated(tv%SpV_avg)) then
             U_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &

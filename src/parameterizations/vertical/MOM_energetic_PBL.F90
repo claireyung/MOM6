@@ -362,9 +362,9 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
   if (.not. associated(tv%eqn_of_state)) call MOM_error(FATAL, &
       "energetic_PBL: Temperature, salinity and an equation of state "//&
       "must now be used.")
-  if (GV%Boussinesq .and. (.not.associated(fluxes%ustar))) call MOM_error(FATAL, &
-      "energetic_PBL: No surface friction velocity (ustar) defined in fluxes type in Boussinesq mode.")
-  if ((.not.GV%Boussinesq) .and.  (.not.associated(fluxes%tau_mag))) call MOM_error(FATAL, &
+  if (.not.(associated(fluxes%ustar) .or. associated(fluxes%tau_mag))) call MOM_error(FATAL, &
+      "energetic_PBL: No surface friction velocity (ustar or tau_mag) defined in fluxes type.")
+  if ((.not.GV%Boussinesq) .and. (.not.associated(fluxes%tau_mag))) call MOM_error(FATAL, &
       "energetic_PBL: No surface wind stress magnitude defined in fluxes type in non-Boussinesq mode.")
   if (CS%use_LT .and. .not.associated(Waves)) call MOM_error(FATAL, &
       "energetic_PBL: The Waves control structure must be associated if CS%use_LT "//&
@@ -426,7 +426,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
       do K=1,nz+1 ; Kd(K) = 0.0 ; enddo
 
       ! Make local copies of surface forcing and process them.
-      if (GV%Boussinesq) then
+      if (associated(fluxes%ustar) .and. (GV%Boussinesq .or. .not.associated(fluxes%tau_mag))) then
         u_star = fluxes%ustar(i,j)
         u_star_Mean = fluxes%ustar_gustless(i,j)
         mech_TKE = dt * GV%Rho0 * u_star**3

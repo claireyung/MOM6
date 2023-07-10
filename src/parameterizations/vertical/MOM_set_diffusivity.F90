@@ -1637,7 +1637,7 @@ subroutine add_MLrad_diffusivity(dz, fluxes, tv, j, Kd_int, G, GV, US, CS, TKE_t
     endif
 
     ! Determine the energy flux out of the mixed layer and its vertical decay scale.
-    if (GV%Boussinesq) then
+    if (associated(fluxes%ustar) .and. (GV%Boussinesq .or. .not.associated(fluxes%tau_mag))) then
       ustar_sq = max(fluxes%ustar(i,j), CS%ustar_min)**2
       u_star_H = GV%Z_to_H * fluxes%ustar(i,j)
     elseif (allocated(tv%SpV_avg)) then
