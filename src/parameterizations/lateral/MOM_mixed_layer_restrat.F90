@@ -11,7 +11,7 @@ use MOM_domains,       only : pass_var, To_West, To_South, Omit_Corners
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_file_parser,   only : openParameterBlock, closeParameterBlock
-use MOM_forcing_type,  only : mech_forcing
+use MOM_forcing_type,  only : mech_forcing, find_ustar
 use MOM_grid,          only : ocean_grid_type
 use MOM_hor_index,     only : hor_index_type
 use MOM_lateral_mixing_coeffs, only : VarMix_CS
@@ -498,8 +498,10 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
 
   if (CS%debug) then
     call hchksum(h, 'mixed_layer_restrat: h', G%HI, haloshift=1, scale=GV%H_to_mks)
-    call hchksum(forces%ustar, 'mixed_layer_restrat: u*', G%HI, haloshift=1, scale=US%Z_to_m*US%s_to_T)
-    call hchksum(forces%tau_mag, 'mixed_layer_restrat: tau_mag', G%HI, haloshift=1, scale=US%RLZ_T2_to_Pa)
+    if (associated(forces%ustar)) &
+      call hchksum(forces%ustar, 'mixed_layer_restrat: u*', G%HI, haloshift=1, scale=US%Z_to_m*US%s_to_T)
+    if (associated(forces%tau_mag)) &
+      call hchksum(forces%tau_mag, 'mixed_layer_restrat: tau_mag', G%HI, haloshift=1, scale=US%RLZ_T2_to_Pa)
     call hchksum(MLD_fast, 'mixed_layer_restrat: MLD', G%HI, haloshift=1, scale=GV%H_to_mks)
     call hchksum(Rml_av_fast, 'mixed_layer_restrat: rml', G%HI, haloshift=1, &
                  scale=GV%m_to_H*US%L_T_to_m_s**2)
@@ -512,7 +514,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
 !   U - Component
   !$OMP do
   do j=js,je ; do I=is-1,ie
-    if (GV%Boussinesq) then
+    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
       u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i+1,j)))
     elseif (allocated(tv%SpV_avg)) then
       u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
@@ -606,7 +608,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
 !  V- component
   !$OMP do
   do J=js-1,je ; do i=is,ie
-    if (GV%Boussinesq) then
+    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
       u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
     elseif (allocated(tv%SpV_avg)) then
       u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
@@ -818,6 +820,9 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
     wpup                  ! Turbulent vertical momentum [L H T-2 ~> m2 s-2 or kg m-1 s-2]
   real :: uDml_diag(SZIB_(G),SZJ_(G))  ! A 2D copy of uDml for diagnostics [H L2 T-1 ~> m3 s-1 or kg s-1]
   real :: vDml_diag(SZI_(G),SZJB_(G))  ! A 2D copy of vDml for diagnostics [H L2 T-1 ~> m3 s-1 or kg s-1]
+  real :: U_star_2d(SZI_(G),SZJ_(G))   ! The wind friction velocity, calculated using the Boussinesq
+                          ! reference density or the time-evolving surface density in non-Boussinesq
+                          ! mode [Z T-1 ~> m s-1]
   real :: BLD_in_H(SZI_(G)) ! The thickness of the active boundary layer with the topmost BLD of
                           ! height [H ~> m or kg m-2]
   real :: covTS(SZI_(G))  ! SGS TS covariance in Stanley param; currently 0 [C S ~> degC ppt]
@@ -877,12 +882,15 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
 
   call pass_var(bflux, G%domain, halo=1)
 
+  ! Extract the friction velocity from the forcing type.
+  call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1)
+
   if (CS%debug) then
     call hchksum(h,'mixed_Bodner: h', G%HI, haloshift=1, scale=GV%H_to_mks)
     call hchksum(BLD, 'mle_Bodner: BLD in', G%HI, haloshift=1, scale=US%Z_to_m)
     if (associated(bflux)) &
       call hchksum(bflux, 'mle_Bodner: bflux', G%HI, haloshift=1, scale=US%Z_to_m**2*US%s_to_T**3)
-    call hchksum(forces%ustar,'mle_Bodner: u*', G%HI, haloshift=1, scale=US%Z_to_m*US%s_to_T)
+    call hchksum(U_star_2d, 'mle_Bodner: u*', G%HI, haloshift=1, scale=US%Z_to_m*US%s_to_T)
     call hchksum(CS%MLD_filtered, 'mle_Bodner: MLD_filtered 1', &
                  G%HI, haloshift=1, scale=GV%H_to_mks)
     call hchksum(CS%MLD_filtered_slow,'mle_Bodner: MLD_filtered_slow 1', &
@@ -933,7 +941,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   do j = js-1, je+1 ; do i = is-1, ie+1
     w_star3 = max(0., -bflux(i,j)) * BLD(i,j) & ! (this line in Z3 T-3 ~> m3 s-3)
               * ( ( US%Z_to_m * US%s_to_T )**3 ) ! [m3 T3 Z-3 s-3 ~> 1]
-    u_star3 = ( US%Z_to_m * US%s_to_T * forces%ustar(i,j) )**3 ! m3 s-3
+    u_star3 = ( US%Z_to_m * US%s_to_T * U_star_2d(i,j) )**3 ! m3 s-3
     wpup(i,j) = max( CS%min_wstar2, &           ! The max() avoids division by zero later
                 ( CS%mstar * u_star3 + CS%nstar * w_star3 )**two_thirds ) & ! (this line m2 s-2)
                 * ( US%m_to_L * GV%m_to_H * US%T_to_s**2 ) ! [L H s2 m-2 T-2 ~> 1 or kg m-3]
@@ -1118,7 +1126,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
 
   ! Offer diagnostic fields for averaging.
   if (query_averaging_enabled(CS%diag)) then
-    if (CS%id_ustar > 0) call post_data(CS%id_ustar, forces%ustar, CS%diag)
+    if (CS%id_ustar > 0) call post_data(CS%id_ustar, U_star_2d, CS%diag)
     if (CS%id_bflux > 0) call post_data(CS%id_bflux, bflux, CS%diag)
     if (CS%id_wpup  > 0) call post_data(CS%id_wpup, wpup, CS%diag)
     if (CS%id_Rml   > 0) call post_data(CS%id_Rml, buoy_av, CS%diag)
@@ -1331,7 +1339,7 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   do j=js,je ; do I=is-1,ie
     h_vel = 0.5*(htot(i,j) + htot(i+1,j))
 
-    if (GV%Boussinesq) then
+    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
       u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i+1,j)))
     elseif (allocated(tv%SpV_avg)) then
       u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
@@ -1390,7 +1398,7 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   do J=js-1,je ; do i=is,ie
     h_vel = 0.5*(htot(i,j) + htot(i,j+1))
 
-    if (GV%Boussinesq) then
+    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
       u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
     elseif (allocated(tv%SpV_avg)) then
       u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
