@@ -12,7 +12,7 @@ use MOM_domains,       only : To_North, To_East
 use MOM_debugging,     only : uvchksum, hchksum
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
-use MOM_forcing_type,  only : mech_forcing
+use MOM_forcing_type,  only : mech_forcing, find_ustar
 use MOM_get_input,     only : directories
 use MOM_grid,          only : ocean_grid_type
 use MOM_io,            only : MOM_read_data, slasher
@@ -992,6 +992,9 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
     zh, &         ! An estimate of the interface's distance from the bottom
                   ! based on harmonic mean thicknesses [Z ~> m].
     h_ml          ! The mixed layer depth [Z ~> m].
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+    Ustar_2d    ! The wind friction velocity, calculated using the Boussinesq reference density or
+                ! the time-evolving surface density in non-Boussinesq mode [Z T-1 ~> m s-1]
   real, allocatable, dimension(:,:) :: hML_u ! Diagnostic of the mixed layer depth at u points [Z ~> m].
   real, allocatable, dimension(:,:) :: hML_v ! Diagnostic of the mixed layer depth at v points [Z ~> m].
   real, allocatable, dimension(:,:,:) :: Kv_u ! Total vertical viscosity at u-points in
@@ -1064,7 +1067,9 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
     allocate(CS%a1_shelf_v(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
   endif
 
-  !$OMP parallel do default(private) shared(G,GV,US,CS,visc,Isq,Ieq,nz,u,h,forces,hML_u, &
+  call find_ustar(forces, tv, Ustar_2d, G, GV, US, halo=1)
+
+  !$OMP parallel do default(private) shared(G,GV,US,CS,visc,Isq,Ieq,nz,u,h,forces,Ustar_2d,hML_u, &
   !$OMP                                     OBC,h_neglect,dz_neglect,dt,I_valBL,Kv_u,a_cpl_max) &
   !$OMP                     firstprivate(i_hbbl)
   do j=G%Jsc,G%Jec
@@ -1161,7 +1166,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
     endif
 
     call find_coupling_coef(a_cpl, dz_vel, do_i, dz_harm, bbl_thick, kv_bbl, z_i, h_ml, &
-                            dt, j, G, GV, US, CS, visc, forces, tv, work_on_u=.true., OBC=OBC)
+                            dt, j, G, GV, US, CS, visc, Ustar_2d, tv, work_on_u=.true., OBC=OBC)
     a_cpl_gl90(:,:) = 0.0
     if (CS%use_GL90_in_SSW) then
     !  The following block calculates the normalized height above the GL90
@@ -1224,7 +1229,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
           enddo
         endif
         call find_coupling_coef(a_shelf, dz_vel_shelf, do_i_shelf, dz_harm, bbl_thick, &
-                                kv_bbl, z_i, h_ml, dt, j, G, GV, US, CS, visc, forces, tv, &
+                                kv_bbl, z_i, h_ml, dt, j, G, GV, US, CS, visc, Ustar_2d, tv, &
                                 work_on_u=.true., OBC=OBC, shelf=.true.)
         do I=Isq,Ieq ; if (do_i_shelf(I)) CS%a1_shelf_u(I,j) = a_shelf(I,1) ; enddo
       endif
@@ -1373,7 +1378,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
     endif
 
     call find_coupling_coef(a_cpl, dz_vel, do_i, dz_harm, bbl_thick, kv_bbl, z_i, h_ml, &
-                            dt, j, G, GV, US, CS, visc, forces, tv, work_on_u=.false., OBC=OBC)
+                            dt, j, G, GV, US, CS, visc, Ustar_2d, tv, work_on_u=.false., OBC=OBC)
     a_cpl_gl90(:,:) = 0.0
     if (CS%use_GL90_in_SSW) then
     !  The following block calculates the normalized height above the GL90
@@ -1437,7 +1442,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
           enddo
         endif
         call find_coupling_coef(a_shelf, dz_vel_shelf, do_i_shelf, dz_harm, bbl_thick, &
-                                kv_bbl, z_i, h_ml, dt, j, G, GV, US, CS, visc, forces, tv, &
+                                kv_bbl, z_i, h_ml, dt, j, G, GV, US, CS, visc, Ustar_2d, tv, &
                                 work_on_u=.false., OBC=OBC, shelf=.true.)
         do i=is,ie ; if (do_i_shelf(i)) CS%a1_shelf_v(i,J) = a_shelf(i,1) ; enddo
       endif
@@ -1522,7 +1527,7 @@ end subroutine vertvisc_coef
 !! If BOTTOMDRAGLAW is defined, the minimum of Hbbl and half the adjacent
 !! layer thicknesses are used to calculate a_cpl near the bottom.
 subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i, h_ml, &
-                              dt, j, G, GV, US, CS, visc, forces, tv, work_on_u, OBC, shelf)
+                              dt, j, G, GV, US, CS, visc, Ustar_2d, tv, work_on_u, OBC, shelf)
   type(ocean_grid_type),     intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),   intent(in)  :: GV !< Ocean vertical grid structure
   type(unit_scale_type),     intent(in)  :: US !< A dimensional unit scaling type
@@ -1547,7 +1552,11 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
   real,                      intent(in)  :: dt   !< Time increment [T ~> s]
   type(vertvisc_CS),         pointer     :: CS   !< Vertical viscosity control structure
   type(vertvisc_type),       intent(in)  :: visc !< Structure containing viscosities and bottom drag
-  type(mech_forcing),        intent(in)  :: forces !< A structure with the driving mechanical forces
+  real, dimension(SZI_(G),SZJ_(G)), &
+                             intent(in)  :: Ustar_2d !< The wind friction velocity, calculated using
+                                                 !! the Boussinesq reference density or the
+                                                 !! time-evolving surface density in non-Boussinesq
+                                                 !! mode [Z T-1 ~> m s-1]
   type(thermo_var_ptrs),     intent(in)  :: tv   !< A structure containing pointers to any available
                                                  !! thermodynamic fields.
   logical,                   intent(in)  :: work_on_u !< If true, u-points are being calculated,
@@ -1806,33 +1815,31 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
       rho_av1(:) = 0.0
       if (work_on_u) then
         do I=is,ie ; if (do_i(I)) then
-          u_star(I) = 0.5*(sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1)) + &
-                           sqrt(US%L_to_Z*forces%tau_mag(i+1,j) * tv%SpV_avg(i+1,j,1)) )
+          u_star(I) = 0.5 * (Ustar_2d(i,j) + Ustar_2d(i+1,j))
           rho_av1(I) = 2.0 / (tv%SpV_avg(i,j,1) + tv%SpV_avg(i+1,j,1))
           absf(I) = 0.5*(abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I,J)))
         endif ; enddo
         if (do_OBCs) then ; do I=is,ie ; if (do_i(I) .and. (OBC%segnum_u(I,j) /= OBC_NONE)) then
           if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_E) then
-            u_star(I) = sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+            u_star(I) = Ustar_2d(i,j)
             rho_av1(I) = 1.0 / tv%SpV_avg(i,j,1)
           elseif (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_W) then
-            u_star(I) = sqrt(US%L_to_Z*forces%tau_mag(i+1,j) * tv%SpV_avg(i+1,j,1))
+            u_star(I) = Ustar_2d(i+1,j)
             rho_av1(I) = 1.0 / tv%SpV_avg(i+1,j,1)
           endif
         endif ; enddo ; endif
       else ! Work on v-points
         do i=is,ie ; if (do_i(i)) then
-          u_star(i) = 0.5*(sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1)) + &
-                           sqrt(US%L_to_Z*forces%tau_mag(i,j+1) * tv%SpV_avg(i,j+1,1)) )
+          u_star(i) = 0.5 * (Ustar_2d(i,j) + Ustar_2d(i,j+1))
           rho_av1(i) = 2.0 / (tv%SpV_avg(i,j,1) + tv%SpV_avg(i,j+1,1))
           absf(i) = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
         endif ; enddo
         if (do_OBCs) then ; do i=is,ie ; if (do_i(i) .and. (OBC%segnum_v(i,J) /= OBC_NONE)) then
           if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_N) then
-            u_star(i) = sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+            u_star(i) = Ustar_2d(i,j)
             rho_av1(i) = 1.0 / tv%SpV_avg(i,j,1)
           elseif (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_S) then
-            u_star(i) = sqrt(US%L_to_Z*forces%tau_mag(i,j+1) * tv%SpV_avg(i,j+1,1))
+            u_star(i) = Ustar_2d(i,j+1)
             rho_av1(i) = 1.0 / tv%SpV_avg(i,j+1,1)
           endif
         endif ; enddo ; endif
@@ -1843,25 +1850,25 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
     else ! (.not.allocated(tv%SpV_avg))
       if (work_on_u) then
         do I=is,ie ; if (do_i(I)) then
-          u_star(I) = 0.5*(forces%ustar(i,j) + forces%ustar(i+1,j))
+          u_star(I) = 0.5*(Ustar_2d(i,j) + Ustar_2d(i+1,j))
           absf(I) = 0.5*(abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I,J)))
         endif ; enddo
         if (do_OBCs) then ; do I=is,ie ; if (do_i(I) .and. (OBC%segnum_u(I,j) /= OBC_NONE)) then
           if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_E) &
-            u_star(I) = forces%ustar(i,j)
+            u_star(I) = Ustar_2d(i,j)
           if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_W) &
-            u_star(I) = forces%ustar(i+1,j)
+            u_star(I) = Ustar_2d(i+1,j)
         endif ; enddo ; endif
       else
         do i=is,ie ; if (do_i(i)) then
-          u_star(i) = 0.5*(forces%ustar(i,j) + forces%ustar(i,j+1))
+          u_star(i) = 0.5*(Ustar_2d(i,j) + Ustar_2d(i,j+1))
           absf(i) = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
         endif ; enddo
         if (do_OBCs) then ; do i=is,ie ; if (do_i(i) .and. (OBC%segnum_v(i,J) /= OBC_NONE)) then
           if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_N) &
-            u_star(i) = forces%ustar(i,j)
+            u_star(i) = Ustar_2d(i,j)
           if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_S) &
-            u_star(i) = forces%ustar(i,j+1)
+            u_star(i) = Ustar_2d(i,j+1)
         endif ; enddo ; endif
       endif
       do I=is,ie
