@@ -12,7 +12,7 @@ use MOM_EOS,           only : average_specific_vol, calculate_density_derivs
 use MOM_EOS,           only : calculate_spec_vol, calculate_specific_vol_derivs
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
-use MOM_forcing_type,  only : extractFluxes1d, forcing
+use MOM_forcing_type,  only : extractFluxes1d, forcing, find_ustar
 use MOM_grid,          only : ocean_grid_type
 use MOM_opacity,       only : absorbRemainingSW, optics_type, extract_optics_slice
 use MOM_unit_scaling,  only : unit_scale_type
@@ -240,6 +240,9 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     ksort       !   The sorted k-index that each original layer goes to.
   real, dimension(SZI_(G),SZJ_(G)) :: &
     h_miss      !   The summed absolute mismatch [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+    U_star_2d   ! The wind friction velocity, calculated using the Boussinesq reference density or
+                ! the time-evolving surface density in non-Boussinesq mode [Z T-1 ~> m s-1]
   real, dimension(SZI_(G)) :: &
     TKE, &      !   The turbulent kinetic energy available for mixing over a
                 ! time step [H L2 T-2 ~> m3 s-2 or J m-2].
@@ -352,8 +355,8 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   if (.not. associated(tv%eqn_of_state)) call MOM_error(FATAL, &
       "MOM_mixed_layer: Temperature, salinity and an equation of state "//&
       "must now be used.")
-  if (.NOT. associated(fluxes%ustar)) call MOM_error(FATAL, &
-      "MOM_mixed_layer: No surface TKE fluxes (ustar) defined in mixedlayer!")
+  if (.not. (associated(fluxes%ustar) .or. associated(fluxes%tau_mag))) call MOM_error(FATAL, &
+      "MOM_mixed_layer: No surface TKE fluxes (ustar or tau_mag) defined in mixedlayer!")
 
   nkmb = CS%nkml+CS%nkbl
   Inkml = 1.0 / REAL(CS%nkml)
@@ -426,6 +429,9 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   endif
   max_BL_det(:) = -1
   EOSdom(:) = EOS_domain(G%HI)
+
+  ! Extract the friction velocity from the forcing type.
+  call find_ustar(fluxes, tv, U_star_2d, G, GV, US)
 
   !$OMP parallel default(shared) firstprivate(dKE_CA,cTKE,h_CA,max_BL_det,p_ref,p_ref_cv) &
   !$OMP                 private(h,u,v,h_orig,eps,T,S,opacity_band,d_ea,d_eb,R0,SpV0,Rcv,ksort, &
@@ -552,7 +558,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
 
     !    First the TKE at the depth of free convection that is available
     !  to drive mixing is calculated.
-    call find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, &
+    call find_starting_TKE(htot, h_CA, fluxes, U_star_2d, Conv_En, cTKE, dKE_FC, dKE_CA, &
                            TKE, TKE_river, Idecay_len_TKE, cMKE, tv, dt, Idt_diag, &
                            j, ksort, G, GV, US, CS)
 
@@ -689,7 +695,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! restratification.  For nkml>=4 the whole strategy should be revisited.
       do i=is,ie
         ! Perhaps in the following, u* could be replaced with u*+w*?
-        if (GV%Boussinesq) then
+        if (associated(fluxes%ustar) .and. (GV%Boussinesq .or. .not.associated(fluxes%tau_mag))) then
           kU_star = CS%vonKar * GV%Z_to_H * fluxes%ustar(i,j)
         elseif (allocated(tv%SpV_avg)) then
           kU_star = CS%vonKar * GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) / tv%SpV_avg(i,j,1))
@@ -1418,7 +1424,7 @@ end subroutine mixedlayer_convection
 
 !>   This subroutine determines the TKE available at the depth of free
 !! convection to drive mechanical entrainment.
-subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, &
+subroutine find_starting_TKE(htot, h_CA, fluxes, U_star_2d, Conv_En, cTKE, dKE_FC, dKE_CA, &
                              TKE, TKE_river, Idecay_len_TKE, cMKE, tv, dt, Idt_diag, &
                              j, ksort, G, GV, US, CS)
   type(ocean_grid_type),      intent(in)    :: G       !< The ocean's grid structure.
@@ -1431,6 +1437,10 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
   type(forcing),              intent(in)    :: fluxes  !< A structure containing pointers to any
                                                        !! possible forcing fields.  Unused fields
                                                        !! have NULL pointers.
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) ::  U_star_2d !< The wind friction velocity, calculated
+                                                       !! using the Boussinesq reference density or
+                                                       !! the time-evolving surface density in
+                                                       !! non-Boussinesq mode [Z T-1 ~> m s-1]
   real, dimension(SZI_(G)),   intent(inout) :: Conv_En !< The buoyant turbulent kinetic energy source
                                                        !! due to free convection [H L2 T-2 ~> m3 s-2 or J m-2].
   real, dimension(SZI_(G)),   intent(in)    :: dKE_FC  !< The vertically integrated change in
@@ -1482,8 +1492,6 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
   real :: exp_kh    ! The nondimensional decay of TKE across a layer [nondim].
   real :: absf      ! The absolute value of f averaged to thickness points [T-1 ~> s-1].
   real :: U_star    ! The friction velocity [Z T-1 ~> m s-1].
-  real :: I_rho     ! The inverse of the reference density times a ratio of scaling
-                    ! factors [Z L-1 R-1 ~> m3 kg-1]
   real :: absf_Ustar  ! The absolute value of f divided by U_star converted to thickness units [H-1 ~> m-1 or m2 kg-1]
   real :: wind_TKE_src ! The surface wind source of TKE [H L2 T-3 ~> m3 s-3 or W m-2].
   real :: diag_wt   ! The ratio of the current timestep to the diagnostic
@@ -1495,17 +1503,9 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
   is = G%isc ; ie = G%iec ; nz = GV%ke
   diag_wt = dt * Idt_diag
 
-  I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
-
   if (CS%omega_frac >= 1.0) absf = 2.0*CS%omega
   do i=is,ie
-    if (GV%Boussinesq) then
-      U_star = fluxes%ustar(i,j)
-    elseif (allocated(tv%SpV_avg)) then
-      U_star = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
-    else
-      U_star = sqrt(fluxes%tau_mag(i,j) * I_rho)
-    endif
+    U_star = U_star_2d(i,j)
 
     if (GV%Boussinesq .or. (.not.allocated(tv%SpV_avg))) then
       H_to_Z = GV%H_to_Z
@@ -1599,7 +1599,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
     dKE_conv = dKE_CA(i,1) * MKE_rate_CA + dKE_FC(i) * MKE_rate_FC
 ! At this point, it is assumed that cTKE is positive and stored in TKE_CA!
 ! Note: Removed factor of 2 in u*^3 terms.
-    if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+    if (GV%Boussinesq .or. GV%semi_Boussinesq .or. .not.(associated(fluxes%tau_mag))) then
       TKE(i) = (dt*CS%mstar)*((GV%Z_to_H*US%Z_to_L**2*(U_star*U_Star*U_Star))*exp_kh) + &
                (exp_kh * dKE_conv + nstar_FC*Conv_En(i) + nstar_CA * TKE_CA)
     else
@@ -1613,7 +1613,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
     endif
 
     if (CS%TKE_diagnostics) then
-      if (GV%Boussinesq .or. GV%semi_Boussinesq) then
+      if (GV%Boussinesq .or. GV%semi_Boussinesq .or. .not.(associated(fluxes%tau_mag))) then
         wind_TKE_src = CS%mstar*(GV%Z_to_H*US%Z_to_L**2*U_star*U_Star*U_Star) * diag_wt
       else
         wind_TKE_src = CS%mstar*(GV%RZ_to_H * US%Z_to_L*fluxes%tau_mag(i,j) * U_star) * diag_wt
