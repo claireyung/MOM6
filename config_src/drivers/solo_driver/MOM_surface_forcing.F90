@@ -72,6 +72,7 @@ type, public :: surface_forcing_CS ; private
   logical :: use_temperature    !< if true, temp & salinity used as state variables
   logical :: restorebuoy        !< if true, use restoring surface buoyancy forcing
   logical :: adiabatic          !< if true, no diapycnal mass fluxes or surface buoyancy forcing
+  logical :: nonBous            !< If true, this run is fully non-Boussinesq
   logical :: variable_winds     !< if true, wind stresses vary with time
   logical :: variable_buoyforce !< if true, buoyancy forcing varies with time.
   real    :: south_lat          !< southern latitude of the domain [degrees_N] or [km] or [m]
@@ -252,9 +253,10 @@ subroutine set_forcing(sfc_state, forces, fluxes, day_start, day_interval, G, US
 
   if (CS%first_call_set_forcing) then
     ! Allocate memory for the mechanical and thermodynamic forcing fields.
-    call allocate_mech_forcing(G, forces, stress=.true., ustar=.true., press=.true., tau_mag=.true.)
+    call allocate_mech_forcing(G, forces, stress=.true., ustar=.not.CS%nonBous, press=.true., tau_mag=CS%nonBous)
 
-    call allocate_forcing_type(G, fluxes, ustar=.true., fix_accum_bug=CS%fix_ustar_gustless_bug, tau_mag=.true.)
+    call allocate_forcing_type(G, fluxes, ustar=.not.CS%nonBous, tau_mag=CS%nonBous, &
+                               fix_accum_bug=CS%fix_ustar_gustless_bug)
     if (trim(CS%buoy_config) /= "NONE") then
       if ( CS%use_temperature ) then
         call allocate_forcing_type(G, fluxes, water=.true., heat=.true., press=.true.)
@@ -855,7 +857,7 @@ subroutine wind_forcing_by_data_override(sfc_state, forces, day, G, US, CS)
   call callTree_enter("wind_forcing_by_data_override, MOM_surface_forcing.F90")
 
   if (.not.CS%dataOverrideIsInitialized) then
-    call allocate_mech_forcing(G, forces, stress=.true., ustar=.true., press=.true., tau_mag=.true.)
+    call allocate_mech_forcing(G, forces, stress=.true., ustar=.not.CS%nonBous, press=.true., tau_mag=CS%nonBous)
     call data_override_init(G%Domain)
     CS%dataOverrideIsInitialized = .True.
   endif
@@ -1557,6 +1559,8 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   real :: flux_const_default ! The unscaled value of FLUXCONST [m day-1]
+  logical :: Boussinesq       ! If true, this run is fully Boussinesq
+  logical :: semi_Boussinesq  ! If true, this run is partially non-Boussinesq
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: default_2018_answers ! The default setting for the various 2018_ANSWERS flags.
   logical :: answers_2018    ! If true, use the order of arithmetic and expressions that recover
@@ -1584,6 +1588,14 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
   call get_param(param_file, mdl, "ENABLE_THERMODYNAMICS", CS%use_temperature, &
                  "If true, Temperature and salinity are used as state "//&
                  "variables.", default=.true.)
+  call get_param(param_file, "MOM", "BOUSSINESQ", Boussinesq, &
+                 "If true, make the Boussinesq approximation.", default=.true., do_not_log=.true.)
+  call get_param(param_file, "MOM", "SEMI_BOUSSINESQ", semi_Boussinesq, &
+                 "If true, do non-Boussinesq pressure force calculations and use mass-based "//&
+                 "thicknesses, but use RHO_0 to convert layer thicknesses into certain "//&
+                 "height changes.  This only applies if BOUSSINESQ is false.", &
+                 default=.true., do_not_log=.true.)
+  CS%nonBous = .not.(Boussinesq .or. semi_Boussinesq)
   call get_param(param_file, mdl, "INPUTDIR", CS%inputdir, &
                  "The directory in which all input files are found.", &
                  default=".")
@@ -1858,7 +1870,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
                  "calculate accelerations and the mass for conservation "//&
                  "properties, or with BOUSSINSEQ false to convert some "//&
                  "parameters from vertical units of m to kg m-2.", &
-                 units="kg m-3", default=1035.0, scale=US%kg_m3_to_R)
+                 units="kg m-3", default=1035.0, scale=US%kg_m3_to_R) ! (, do_not_log=CS%nonBous)
   call get_param(param_file, mdl, "RESTOREBUOY", CS%restorebuoy, &
                  "If true, the buoyancy fluxes drive the model back toward some "//&
                  "specified surface state with a rate given by FLUXCONST.", default=.false.)
