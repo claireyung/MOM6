@@ -575,8 +575,7 @@ subroutine ALE_offline_inputs(CS, G, GV, US, h, tv, Reg, uhtr, vhtr, Kd, debug, 
     h(i,j,k) = h_new(i,j,k)
   enddo ; enddo ; enddo
 
-  ! Record that SpV_avg is no longer valid.
-  if (allocated(tv%SpV_avg)) tv%valid_SpV_halo = -1
+  if (allocated(tv%SpV_avg)) tv%valid_SpV_halo = -1   ! Record that SpV_avg is no longer valid.
 
   if (CS%show_call_tree) call callTree_leave("ALE_offline_inputs()")
 end subroutine ALE_offline_inputs
