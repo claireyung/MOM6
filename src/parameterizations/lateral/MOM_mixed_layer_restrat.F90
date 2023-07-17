@@ -186,6 +186,9 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
     h_avail               ! The volume available for diffusion out of each face of each
                           ! sublayer of the mixed layer, divided by dt [H L2 T-1 ~> m3 s-1 or kg s-1].
   real, dimension(SZI_(G),SZJ_(G)) :: &
+    U_star_2d, &          ! The wind friction velocity in thickness-based units, calculated using
+                          ! the Boussinesq reference density or the time-evolving surface density
+                          ! in non-Boussinesq mode [H T-1 ~> m s-1 or kg m-2 s-1]
     MLD_fast, &           ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
     htot_fast, &          ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
     Rml_av_fast, &        ! Negative g_Rho0 times the average mixed layer density or G_Earth
@@ -196,10 +199,6 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
                           ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
   real :: g_Rho0          ! G_Earth/Rho0 times a thickness conversion factor
                           ! [L2 H-1 T-2 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2]
-  real :: rho0_sc         ! The rescaled Boussinesq reference density (in non-Boussinesq mode) or its
-                          ! rescaled inverse (if Boussinesq) [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
-  real :: tau_scale       ! A rescaling factor used in the coversion of the wind stress magnitude to
-                          ! ustar when in fully non-Boussinese mode [H2 R-2 L-1 Z-1 ~> m6 kg-2 or nondim]
   real :: rho_ml(SZI_(G)) ! Potential density relative to the surface [R ~> kg m-3]
   real :: rml_int_fast(SZI_(G)) ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3]
   real :: rml_int_slow(SZI_(G)) ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3]
@@ -262,9 +261,6 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
   covTS(:) = 0.0 !!Functionality not implemented yet; in future, should be passed in tv
   varS(:) = 0.0
 
-  rho0_sc = GV%Rho0 * US%L_to_Z * GV%RZ_to_H**2 ! This rescaled reference density is not used when fully non-Boussinesq.
-  tau_scale = US%L_to_Z * GV%RZ_to_H**2  ! This rescaling factor is used in fully non-Boussinesq mode.
-
   vonKar_x_pi2 = CS%vonKar * 9.8696
 
   if (.not.associated(tv%eqn_of_state)) call MOM_error(FATAL, "mixedlayer_restrat_OM4: "// &
@@ -275,6 +271,9 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
   if (CS%use_stanley_ml .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
        "MOM_mixedlayer_restrat: The Stanley parameterization is not"//&
        "available without the Boussinesq approximation.")
+
+  ! Extract the friction velocity from the forcing type.
+  call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1, H_T_units=.true.)
 
   if (CS%MLE_density_diff > 0.) then ! We need to calculate a mixed layer depth, MLD.
     !! TODO: use derivatives and mid-MLD pressure. Currently this is sigma-0. -AJA
@@ -498,10 +497,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
 
   if (CS%debug) then
     call hchksum(h, 'mixed_layer_restrat: h', G%HI, haloshift=1, scale=GV%H_to_mks)
-    if (associated(forces%ustar)) &
-      call hchksum(forces%ustar, 'mixed_layer_restrat: u*', G%HI, haloshift=1, scale=US%Z_to_m*US%s_to_T)
-    if (associated(forces%tau_mag)) &
-      call hchksum(forces%tau_mag, 'mixed_layer_restrat: tau_mag', G%HI, haloshift=1, scale=US%RLZ_T2_to_Pa)
+    call hchksum(U_star_2d, 'mixed_layer_restrat: u*', G%HI, haloshift=1, scale=GV%H_to_m*US%s_to_T)
     call hchksum(MLD_fast, 'mixed_layer_restrat: MLD', G%HI, haloshift=1, scale=GV%H_to_mks)
     call hchksum(Rml_av_fast, 'mixed_layer_restrat: rml', G%HI, haloshift=1, &
                  scale=GV%m_to_H*US%L_T_to_m_s**2)
@@ -514,15 +510,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
 !   U - Component
   !$OMP do
   do j=js,je ; do I=is-1,ie
-    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-      u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i+1,j)))
-    elseif (allocated(tv%SpV_avg)) then
-      u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
-                                      sqrt(tau_scale*forces%tau_mag(i+1,j) / tv%SpV_avg(i+1,j,1)) ) )
-    else
-      u_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
-                                      sqrt(forces%tau_mag(i+1,j) * rho0_sc)) )
-    endif
+    u_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i+1,j)))
     absf = 0.5*(abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I,J)))
     ! If needed, res_scaling_fac = min( ds, L_d ) / l_f
     if (res_upscale) res_scaling_fac = &
@@ -608,15 +596,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
 !  V- component
   !$OMP do
   do J=js-1,je ; do i=is,ie
-    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-      u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
-    elseif (allocated(tv%SpV_avg)) then
-      u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
-                                      sqrt(tau_scale*forces%tau_mag(i,j+1) / tv%SpV_avg(i,j+1,1)) ) )
-    else
-      u_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
-                                      sqrt(forces%tau_mag(i,j+1) * rho0_sc)) )
-    endif
+    u_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i,j+1)))
 
     absf = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
     ! If needed, res_scaling_fac = min( ds, L_d ) / l_f
@@ -1214,15 +1194,14 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
     h_avail               ! The volume available for diffusion out of each face of each
                           ! sublayer of the mixed layer, divided by dt [H L2 T-1 ~> m3 s-1 or kg s-1].
   real, dimension(SZI_(G),SZJ_(G)) :: &
+    U_star_2d, &          ! The wind friction velocity in thickness-based units, calculated using
+                          ! the Boussinesq reference density or the time-evolving surface density
+                          ! in non-Boussinesq mode [H T-1 ~> m s-1 or kg m-2 s-1]
     htot, &               ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
     Rml_av                ! g_Rho0 times the average mixed layer density or negative G_Earth
                           ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
   real :: g_Rho0          ! G_Earth/Rho0 times a thickness conversion factor
                           ! [L2 H-1 T-2 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2]
-  real :: rho0_sc         ! The rescaled Boussinesq reference density (in non-Boussinesq mode) or its
-                          ! rescaled inverse (if Boussinesq) [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
-  real :: tau_scale       ! A rescaling factor used in the coversion of the wind stress magnitude to
-                          ! ustar when in fully non-Boussinese mode [H2 R-2 L-1 Z-1 ~> m6 kg-2 or nondim]
   real :: Rho_ml(SZI_(G)) ! Potential density relative to the surface [R ~> kg m-3]
   real :: rho_int(SZI_(G)) ! The integral of density over the mixed layer depth [R H ~> kg m-2 or kg2 m-3]
   real :: SpV_ml(SZI_(G)) ! Specific volume evaluated at the surface pressure [R-1 ~> m3 kg-1]
@@ -1270,8 +1249,6 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   I4dt       = 0.25 / dt
   g_Rho0     = GV%H_to_Z * GV%g_Earth / GV%Rho0
   vonKar_x_pi2 = CS%vonKar * 9.8696
-  rho0_sc = GV%Rho0 * US%L_to_Z * GV%RZ_to_H**2 ! This rescaled reference density is not used when fully non-Boussinesq.
-  tau_scale = US%L_to_Z * GV%RZ_to_H**2  ! This rescaling factor is used in fully non-Boussinesq mode.
   use_EOS    = associated(tv%eqn_of_state)
   h_neglect  = GV%H_subroundoff
 
@@ -1280,6 +1257,9 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
 
   if (CS%use_Stanley_ML) call MOM_error(FATAL, "mixedlayer_restrat_BML: "// &
          "The Stanley parameterization is not available with the BML.")
+
+  ! Extract the friction velocity from the forcing type.
+  call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1, H_T_units=.true.)
 
   ! Fix this later for nkml >= 3.
 
@@ -1339,15 +1319,7 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   do j=js,je ; do I=is-1,ie
     h_vel = 0.5*(htot(i,j) + htot(i+1,j))
 
-    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-      u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i+1,j)))
-    elseif (allocated(tv%SpV_avg)) then
-      u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
-                                      sqrt(tau_scale*forces%tau_mag(i+1,j) / tv%SpV_avg(i+1,j,1)) ) )
-    else
-      u_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
-                                      sqrt(forces%tau_mag(i+1,j) * rho0_sc)) )
-    endif
+    u_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i+1,j)))
 
     absf = 0.5*(abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I,J)))
 
@@ -1398,15 +1370,7 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   do J=js-1,je ; do i=is,ie
     h_vel = 0.5*(htot(i,j) + htot(i,j+1))
 
-    if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-      u_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
-    elseif (allocated(tv%SpV_avg)) then
-      u_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
-                                      sqrt(tau_scale*forces%tau_mag(i,j+1) / tv%SpV_avg(i,j+1,1))) )
-    else
-      u_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
-                                      sqrt(forces%tau_mag(i,j+1) * rho0_sc)) )
-    endif
+    u_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i,j+1)))
 
     absf = 0.5*(abs(G%CoriolisBu(I-1,J)) + abs(G%CoriolisBu(I,J)))
 

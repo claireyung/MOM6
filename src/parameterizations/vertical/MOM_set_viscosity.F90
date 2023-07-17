@@ -16,7 +16,7 @@ use MOM_domains,       only : pass_var, CORNER
 use MOM_EOS,           only : calculate_density, calculate_density_derivs, calculate_specific_vol_derivs
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
-use MOM_forcing_type,  only : forcing, mech_forcing
+use MOM_forcing_type,  only : forcing, mech_forcing, find_ustar
 use MOM_grid,          only : ocean_grid_type
 use MOM_hor_index,     only : hor_index_type
 use MOM_interface_heights, only : thickness_to_dz
@@ -1354,6 +1354,9 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   real, dimension(SZI_(G),SZJB_(G)) :: &
     mask_v      ! A mask that disables any contributions from v points that
                 ! are land or past open boundary conditions [nondim], 0 or 1.
+  real :: U_star_2d(SZI_(G),SZJ_(G)) ! The wind friction velocity in thickness-based units,
+                ! calculated using the Boussinesq reference density or the time-evolving
+                ! surface density in non-Boussinesq mode [H T-1 ~> m s-1 or kg m-2 s-1]
   real :: h_at_vel(SZIB_(G),SZK_(GV))! Layer thickness at velocity points,
                 ! using an upwind-biased second order accurate estimate based
                 ! on the previous velocity direction [H ~> m or kg m-2].
@@ -1401,10 +1404,6 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
                       ! factor from lateral lengths to layer thicknesses [H L-1 ~> nondim or kg m-3].
   real :: cdrag_sqrt_H_RL ! Square root of the drag coefficient, times a unit conversion factor from
                       ! density times lateral lengths to layer thicknesses [H L-1 R-1 ~> m3 kg-1 or nondim]
-  real :: rho0_sc     ! The rescaled Boussinesq reference density (in non-Boussinesq mode) or its
-                      ! rescaled inverse (if Boussinesq) [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
-  real :: tau_scale   ! A rescaling factor used in the coversion of the wind stress magnitude to
-                      ! ustar when in fully non-Boussinese mode [H2 R-2 L-1 Z-1 ~> m6 kg-2 or nondim]
   real :: oldfn       ! The integrated energy required to
                       ! entrain up to the bottom of the layer,
                       ! divided by G_Earth [H R ~> kg m-2 or kg2 m-5].
@@ -1451,9 +1450,6 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   cdrag_sqrt_H = cdrag_sqrt * US%L_to_m * GV%m_to_H
   cdrag_sqrt_H_RL = cdrag_sqrt * US%L_to_Z * GV%RZ_to_H
 
-  rho0_sc = GV%Rho0 * US%L_to_Z * GV%RZ_to_H**2 ! This rescaled reference density is not used when fully non-Boussinesq.
-  tau_scale = US%L_to_Z * GV%RZ_to_H**2  ! This rescaling factor is used in fully non-Boussinesq mode.
-
   OBC => CS%OBC
   use_EOS = associated(tv%eqn_of_state)
   nonBous_ML = allocated(tv%SpV_avg)
@@ -1466,6 +1462,9 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   if (associated(forces%frac_shelf_u) .neqv. associated(forces%frac_shelf_v)) &
     call MOM_error(FATAL, "set_viscous_ML: one of forces%frac_shelf_u and "//&
                    "forces%frac_shelf_v is associated, but the other is not.")
+
+  ! Extract the friction velocity from the forcing type.
+  call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1, H_T_units=.true.)
 
   if (associated(forces%frac_shelf_u)) then
     ! This configuration has ice shelves, and the appropriate variables need to be
@@ -1520,8 +1519,8 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
 
   !$OMP parallel do default(private) shared(u,v,h,tv,forces,visc,dt,G,GV,US,CS,use_EOS,dt_Rho0, &
   !$OMP                                     nonBous_ML,h_neglect,dz_neglect,h_tiny,g_H_Rho0, &
-  !$OMP                                     js,je,OBC,Isq,Ieq,nz,nkml,U_bg_sq,mask_v,tau_scale, &
-  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,Rho0x400_G,rho0_sc)
+  !$OMP                                     js,je,OBC,Isq,Ieq,nz,nkml,U_bg_sq,mask_v, &
+  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,Rho0x400_G)
   do j=js,je  ! u-point loop
     if (CS%dynamic_viscous_ML) then
       do_any = .false.
@@ -1542,15 +1541,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
             if (CS%omega_frac > 0.0) &
               absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
           endif
-          if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-            U_star = max(CS%ustar_min, 0.5*GV%Z_to_H * (forces%ustar(i,j) + forces%ustar(i+1,j)))
-          elseif (allocated(tv%SpV_avg)) then
-            U_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
-                                            sqrt(tau_scale*forces%tau_mag(i+1,j) / tv%SpV_avg(i+1,j,1)) ) )
-          else
-            U_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
-                                            sqrt(forces%tau_mag(i+1,j) * rho0_sc)) )
-          endif
+          U_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i+1,j)))
           Idecay_len_TKE(I) = (absf / U_star) * CS%TKE_decay
         endif
       enddo
@@ -1821,15 +1812,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
               absf = sqrt(CS%omega_frac*4.0*CS%omega**2 + (1.0-CS%omega_frac)*absf**2)
           endif
 
-          if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-            U_star = max(CS%ustar_min, 0.5*GV%Z_to_H*(forces%ustar(i,j) + forces%ustar(i,j+1)))
-          elseif (allocated(tv%SpV_avg)) then
-            U_star = max(CS%ustar_min, 0.5*(sqrt(tau_scale*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1)) + &
-                                            sqrt(tau_scale*forces%tau_mag(i,j+1) / tv%SpV_avg(i,j+1,1)) ) )
-          else
-            U_star = max(CS%ustar_min, 0.5*(sqrt(forces%tau_mag(i,j) * rho0_sc) + &
-                                            sqrt(forces%tau_mag(i,j+1) * rho0_sc)) )
-          endif
+          U_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i,j+1)))
           Idecay_len_TKE(i) = (absf / U_star) * CS%TKE_decay
 
         endif

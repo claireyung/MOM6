@@ -241,8 +241,11 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   real, dimension(SZI_(G),SZJ_(G)) :: &
     h_miss      !   The summed absolute mismatch [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G)) :: &
-    U_star_2d   ! The wind friction velocity, calculated using the Boussinesq reference density or
+    U_star_2d, &! The wind friction velocity, calculated using the Boussinesq reference density or
                 ! the time-evolving surface density in non-Boussinesq mode [Z T-1 ~> m s-1]
+    U_star_H_2d ! The wind friction velocity in thickness-based units, calculated
+                ! using the Boussinesq reference density or the time-evolving
+                ! surface density in non-Boussinesq mode [H T-1 ~> m s-1 or kg m-2 s-1]
   real, dimension(SZI_(G)) :: &
     TKE, &      !   The turbulent kinetic energy available for mixing over a
                 ! time step [H L2 T-2 ~> m3 s-2 or J m-2].
@@ -432,6 +435,8 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
 
   ! Extract the friction velocity from the forcing type.
   call find_ustar(fluxes, tv, U_star_2d, G, GV, US)
+  if (CS%Resolve_Ekman .and. (CS%nkml>1)) &
+    call find_ustar(fluxes, tv, U_star_H_2d, G, GV, US, H_T_units=.true.)
 
   !$OMP parallel default(shared) firstprivate(dKE_CA,cTKE,h_CA,max_BL_det,p_ref,p_ref_cv) &
   !$OMP                 private(h,u,v,h_orig,eps,T,S,opacity_band,d_ea,d_eb,R0,SpV0,Rcv,ksort, &
@@ -695,13 +700,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! restratification.  For nkml>=4 the whole strategy should be revisited.
       do i=is,ie
         ! Perhaps in the following, u* could be replaced with u*+w*?
-        if (associated(fluxes%ustar) .and. (GV%Boussinesq .or. .not.associated(fluxes%tau_mag))) then
-          kU_star = CS%vonKar * GV%Z_to_H * fluxes%ustar(i,j)
-        elseif (allocated(tv%SpV_avg)) then
-          kU_star = CS%vonKar * GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) / tv%SpV_avg(i,j,1))
-        else  ! This semi-Boussinesq form is mathematically equivalent to the Boussinesq version above.
-          kU_star = CS%vonKar * GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * GV%Rho0)
-        endif
+        kU_star = CS%vonKar * U_star_H_2d(i,j)
         if (associated(fluxes%ustar_shelf) .and. associated(fluxes%frac_shelf_h)) then
           if (fluxes%frac_shelf_h(i,j) > 0.0) then
             if (allocated(tv%SpV_avg)) then

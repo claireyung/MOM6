@@ -1114,7 +1114,7 @@ end subroutine calculateBuoyancyFlux2d
 
 !> Determine the friction velocity from the contenxts of a forcing type, perhaps
 !! using the evolving surface density.
-subroutine find_ustar_fluxes(fluxes, tv, U_star, G, GV, US, halo)
+subroutine find_ustar_fluxes(fluxes, tv, U_star, G, GV, US, halo, H_T_units)
   type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
@@ -1122,34 +1122,55 @@ subroutine find_ustar_fluxes(fluxes, tv, U_star, G, GV, US, halo)
   type(thermo_var_ptrs),   intent(in)  :: tv   !< Structure containing pointers to any
                                                !! available thermodynamic fields.
   real, dimension(SZI_(G),SZJ_(G)), &
-                           intent(out) :: U_star !< The surface friction velocity [Z T-1 ~> m s-1]
+                           intent(out) :: U_star !< The surface friction velocity [Z T-1 ~> m s-1] or
+                                               !! [H T-1 ~> m s-1 or kg m-2 s-1], depending on H_T_units.
   integer,       optional, intent(in)  :: halo !< The extra halo size to fill in, 0 by default
+  logical,       optional, intent(in)  :: H_T_units !< If present and true, return U_star in units
+                                               !! of [H T-1 ~> m s-1 or kg m-2 s-1]
 
   ! Local variables
   real :: I_rho        ! The inverse of the reference density times a ratio of scaling
-                       ! factors [Z L-1 R-1 ~> m3 kg-1]
+                       ! factors [Z L-1 R-1 ~> m3 kg-1] or in some semi-Boussinesq cases
+                       ! the rescaled reference density [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
+  logical :: Z_T_units ! If true, U_star is returned in units of [Z T-1 ~> m s-1], otherwise it is
+                       ! returned in [H T-1 ~> m s-1 or kg m-2 s-1]
   integer :: i, j, k, is, ie, js, je, hs
 
   hs = 0 ; if (present(halo)) hs = max(halo, 0)
   is = G%isc - hs ; ie = G%iec + hs ; js = G%jsc - hs ; je = G%jec + hs
 
+  Z_T_units = .true. ; if (present(H_T_units)) Z_T_units = .not.H_T_units
+
   if (.not.(associated(fluxes%ustar) .or. associated(fluxes%tau_mag))) &
     call MOM_error(FATAL, "find_ustar_fluxes requires that either ustar or tau_mag be associated.")
 
   if (associated(fluxes%ustar) .and. (GV%Boussinesq .or. .not.associated(fluxes%tau_mag))) then
-    do j=js,je ; do i=is,ie
-      U_star(i,j) = fluxes%ustar(i,j)
-    enddo ; enddo
+    if (Z_T_units) then
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = fluxes%ustar(i,j)
+      enddo ; enddo
+    else
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = GV%Z_to_H * fluxes%ustar(i,j)
+      enddo ; enddo
+    endif
   elseif (allocated(tv%SpV_avg)) then
     if (tv%valid_SpV_halo < 0) call MOM_error(FATAL, &
         "find_ustar_fluxes called in non-Boussinesq mode with invalid values of SpV_avg.")
     if (tv%valid_SpV_halo < hs) call MOM_error(FATAL, &
         "find_ustar_fluxes called in non-Boussinesq mode with insufficient valid values of SpV_avg.")
-    do j=js,je ; do i=is,ie
-      U_star(i,j) = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
-    enddo ; enddo
+    if (Z_T_units) then
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = sqrt(US%L_to_Z*fluxes%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+      enddo ; enddo
+    else
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = GV%RZ_to_H * sqrt(US%L_to_Z*fluxes%tau_mag(i,j) / tv%SpV_avg(i,j,1))
+      enddo ; enddo
+    endif
   else
-    I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+    I_rho = US%L_to_Z * GV%Z_to_H * GV%RZ_to_H
+    if (Z_T_units) I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0
     do j=js,je ; do i=is,ie
       U_star(i,j) = sqrt(fluxes%tau_mag(i,j) * I_rho)
     enddo ; enddo
@@ -1160,7 +1181,7 @@ end subroutine find_ustar_fluxes
 
 !> Determine the friction velocity from the contenxts of a forcing type, perhaps
 !! using the evolving surface density.
-subroutine find_ustar_mech_forcing(forces, tv, U_star, G, GV, US, halo)
+subroutine find_ustar_mech_forcing(forces, tv, U_star, G, GV, US, halo, H_T_units)
   type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
@@ -1170,32 +1191,52 @@ subroutine find_ustar_mech_forcing(forces, tv, U_star, G, GV, US, halo)
   real, dimension(SZI_(G),SZJ_(G)), &
                            intent(out) :: U_star !< The surface friction velocity [Z T-1 ~> m s-1]
   integer,       optional, intent(in)  :: halo !< The extra halo size to fill in, 0 by default
+  logical,       optional, intent(in)  :: H_T_units !< If present and true, return U_star in units
+                                               !! of [H T-1 ~> m s-1 or kg m-2 s-1]
 
   ! Local variables
   real :: I_rho        ! The inverse of the reference density times a ratio of scaling
-                       ! factors [Z L-1 R-1 ~> m3 kg-1]
+                       ! factors [Z L-1 R-1 ~> m3 kg-1] or in some semi-Boussinesq cases
+                       ! the rescaled reference density [H2 Z-1 L-1 R-1 ~> m3 kg-1 or kg m-3]
+  logical :: Z_T_units ! If true, U_star is returned in units of [Z T-1 ~> m s-1], otherwise it is
+                       ! returned in [H T-1 ~> m s-1 or kg m-2 s-1]
   integer :: i, j, k, is, ie, js, je, hs
 
   hs = 0 ; if (present(halo)) hs = max(halo, 0)
   is = G%isc - hs ; ie = G%iec + hs ; js = G%jsc - hs ; je = G%jec + hs
 
+  Z_T_units = .true. ; if (present(H_T_units)) Z_T_units = .not.H_T_units
+
   if (.not.(associated(forces%ustar) .or. associated(forces%tau_mag))) &
     call MOM_error(FATAL, "find_ustar_mech requires that either ustar or tau_mag be associated.")
 
   if (associated(forces%ustar) .and. (GV%Boussinesq .or. .not.associated(forces%tau_mag))) then
-    do j=js,je ; do i=is,ie
-      U_star(i,j) = forces%ustar(i,j)
-    enddo ; enddo
+    if (Z_T_units) then
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = forces%ustar(i,j)
+      enddo ; enddo
+    else
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = GV%Z_to_H * forces%ustar(i,j)
+      enddo ; enddo
+    endif
   elseif (allocated(tv%SpV_avg)) then
     if (tv%valid_SpV_halo < 0) call MOM_error(FATAL, &
         "find_ustar_mech called in non-Boussinesq mode with invalid values of SpV_avg.")
     if (tv%valid_SpV_halo < hs) call MOM_error(FATAL, &
         "find_ustar_mech called in non-Boussinesq mode with insufficient valid values of SpV_avg.")
-    do j=js,je ; do i=is,ie
-      U_star(i,j) = sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1))
-    enddo ; enddo
+    if (Z_T_units) then
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = sqrt(US%L_to_Z*forces%tau_mag(i,j) * tv%SpV_avg(i,j,1))
+      enddo ; enddo
+    else
+      do j=js,je ; do i=is,ie
+        U_star(i,j) = GV%RZ_to_H * sqrt(US%L_to_Z*forces%tau_mag(i,j) / tv%SpV_avg(i,j,1))
+      enddo ; enddo
+    endif
   else
-    I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0 ! This is not used when fully non-Boussinesq.
+    I_rho = US%L_to_Z * GV%Z_to_H * GV%RZ_to_H
+    if (Z_T_units) I_rho = US%L_to_Z * GV%H_to_Z * GV%RZ_to_H ! == US%L_to_Z / GV%Rho0
     do j=js,je ; do i=is,ie
       U_star(i,j) = sqrt(forces%tau_mag(i,j) * I_rho)
     enddo ; enddo
