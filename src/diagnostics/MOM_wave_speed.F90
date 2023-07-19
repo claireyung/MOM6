@@ -222,7 +222,7 @@ subroutine wave_speed(h, tv, G, GV, US, cg1, CS, full_halos, use_ebt_mode, mono_
   c2_scale = US%m_s_to_L_T**2 / 4096.0**2 ! Other powers of 2 give identical results.
 
   min_h_frac = tol_Hfrac / real(nz)
-  !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,tv,use_EOS,non_Bous, &
+  !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,tv,use_EOS,nonBous, &
   !$OMP                                  CS,min_h_frac,calc_modal_structure,l_use_ebt_mode, &
   !$OMP                                  modal_structure,l_mono_N2_column_fraction,l_mono_N2_depth, &
   !$OMP                                  H_to_pres,cg1,g_Rho0,rescale,I_rescale,cg1_min2, &
