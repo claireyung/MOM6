@@ -527,7 +527,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             if (wB_flux < 0.0) then
               ! The buoyancy flux is stabilizing and will reduce the turbulent
               ! fluxes, and iteration is required.
-              n_star_term = (ZETA_N/RC) * (hBL_neut) / (ustar_h)**3
+              n_star_term = (ZETA_N * hBL_neut * VK) / (RC * ustar_h**3)
               do it3 = 1,30
                ! n_star <= 1.0 is the ratio of working boundary layer thickness
                ! to the neutral thickness.
