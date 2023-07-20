@@ -262,8 +262,10 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                !! This is computed as part of the ISOMIP diagnostics.
   real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
   real, parameter :: VK    = 0.40 !< Von Karman's constant - dimensionless
-  real :: ZETA_N = 0.052 !> The fraction of the boundary layer over which the
-               !! viscosity is linearly increasing [nondim]. (Was 1/8. Why?)
+  real :: ZETA_N = 0.013 !> The fraction of the boundary layer over which the
+               !! viscosity is linearly increasing [nondim]. 
+               !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
+               !! divided by the von Karman constant VK. Was 1/8.
   real, parameter :: RC    = 0.20     ! critical flux Richardson number.
   real :: I_ZETA_N !< The inverse of ZETA_N [nondim].
   real :: I_LF     !< The inverse of the latent heat of fusion [Q-1 ~> kg J-1].
