@@ -1289,8 +1289,9 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
     in_use = .true.
     call get_param(param_file, mdl, "RESOLN_N2_FILTER_DEPTH", N2_filter_depth, &
                  "The depth below which N2 is monotonized to avoid stratification "//&
-                 "artifacts from altering the equivalent barotropic mode structure.",&
-                 units="m", default=2000., scale=GV%m_to_H)
+                 "artifacts from altering the equivalent barotropic mode structure.  "//&
+                 "This monotonzization is disabled if this parameter is negative.", &
+                 units="m", default=-1.0, scale=GV%m_to_H)
     allocate(CS%ebt_struct(isd:ied,jsd:jed,GV%ke), source=0.0)
   endif
 
