@@ -86,7 +86,7 @@ type, public :: mixedlayer_restrat_CS ; private
 
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !! timing of diagnostic output.
-  logical :: use_stanley_ml        !< If true, use the Stanley parameterization of SGS T variance
+  logical :: use_Stanley_ML        !< If true, use the Stanley parameterization of SGS T variance
   real    :: ustar_min             !< A minimum value of ustar in thickness units to avoid numerical
                                    !! problems [H T-1 ~> m s-1 or kg m-2 s-1]
   real    :: Kv_restrat            !< A viscosity that sets a floor on the momentum mixing rate
@@ -268,7 +268,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
   if (.not. allocated(VarMix%Rd_dx_h) .and. CS%front_length > 0.) &
     call MOM_error(FATAL, "mixedlayer_restrat_OM4: "// &
          "The resolution argument, Rd/dx, was not associated.")
-  if (CS%use_stanley_ml .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
+  if (CS%use_Stanley_ML .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
        "MOM_mixedlayer_restrat: The Stanley parameterization is not"//&
        "available without the Boussinesq approximation.")
 
@@ -419,7 +419,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
           h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
         enddo
         if (keep_going) then
-          if (CS%use_stanley_ml) then
+          if (CS%use_Stanley_ML) then
             call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p0, tv%varT(:,j,k), covTS, varS, &
                                    rho_ml(:), tv%eqn_of_state, EOSdom)
           else
@@ -462,7 +462,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
           h_avail(i,j,k) = max(I4dt*G%areaT(i,j)*(h(i,j,k)-GV%Angstrom_H),0.0)
         enddo
         if (keep_going) then
-          ! if (CS%use_stanley_ml) then  ! This is not implemented yet in the EoS code.
+          ! if (CS%use_Stanley_ML) then  ! This is not implemented yet in the EoS code.
           !   call calculate_spec_vol(tv%T(:,j,k), tv%S(:,j,k), p0, tv%varT(:,j,k), covTS, varS, &
           !                          rho_ml(:), tv%eqn_of_state, EOSdom)
           ! else
@@ -511,6 +511,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, MLD_in, VarMix,
   !$OMP do
   do j=js,je ; do I=is-1,ie
     u_star = max(CS%ustar_min, 0.5*(U_star_2d(i,j) + U_star_2d(i+1,j)))
+
     absf = 0.5*(abs(G%CoriolisBu(I,J-1)) + abs(G%CoriolisBu(I,J)))
     ! If needed, res_scaling_fac = min( ds, L_d ) / l_f
     if (res_upscale) res_scaling_fac = &
@@ -751,7 +752,7 @@ real function mu(sigma, dh)
 
   ! -0.5    < sigma           : xp(sigma)=0      (upper half of mixed layer)
   ! -1.0+dh < sigma < -0.5    : xp(sigma)=linear (lower half +dh of mixed layer)
-  !           sigma < -1.0+dh : xp(sigma)=1      (below mixed layer + dh)W
+  !           sigma < -1.0+dh : xp(sigma)=1      (below mixed layer + dh)
   xp = max(0., min(1., (-sigma - 0.5)*2. / (1. + 2.*dh)))
 
   ! -0.5    < sigma           : dd(sigma)=1      (upper half of mixed layer)
@@ -1621,7 +1622,7 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
     call get_param(param_file, mdl, "USE_STANLEY_ML", CS%use_Stanley_ML, &
                    "If true, turn on Stanley SGS T variance parameterization "// &
                    "in ML restrat code.", default=.false.)
-    if (CS%use_stanley_ml) then
+    if (CS%use_Stanley_ML) then
       call get_param(param_file, mdl, "STANLEY_COEFF", Stanley_coeff, &
                    "Coefficient correlating the temperature gradient and SGS T variance.", &
                    units="nondim", default=-1.0, do_not_log=.true.)

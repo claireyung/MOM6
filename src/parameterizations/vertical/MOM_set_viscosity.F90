@@ -1136,7 +1136,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
         endif
       endif
 
-      if (CS%body_force_drag .and. (h_bbl_drag(i) > 0.0)) then
+      if (CS%body_force_drag) then ; if (h_bbl_drag(i) > 0.0) then
         ! Increment the Rayleigh drag as a way introduce the bottom drag as a body force.
         h_sum = 0.0
         I_hwtot = 1.0 / h_bbl_drag(i)
@@ -1157,7 +1157,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
         enddo
         ! Do not enhance the near-bottom viscosity in this case.
         Kv_bbl = CS%Kv_BBL_min
-      endif
+      endif ; endif
 
       kv_bbl = max(CS%Kv_BBL_min, kv_bbl)
       if (m==1) then

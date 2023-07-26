@@ -197,7 +197,7 @@ end subroutine post_stoch_EOS_diags
 subroutine MOM_calc_varT(G, GV, US, h, tv, CS, dt)
   type(ocean_grid_type),   intent(in)   :: G   !< The ocean's grid structure.
   type(verticalGrid_type), intent(in)   :: GV  !< Vertical grid structure
-  type(unit_scale_type),   intent(in)   :: US   !< A dimensional unit scaling type
+  type(unit_scale_type),   intent(in)   :: US  !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  &
                           intent(in)    :: h   !< Layer thickness [H ~> m]
   type(thermo_var_ptrs),  intent(inout) :: tv  !< Thermodynamics structure

@@ -823,7 +823,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
     skinbuoyflux(:,:) = 0.0
     call applyBoundaryFluxesInOut(CS%diabatic_aux_CSp, G, GV, US, dt, fluxes, CS%optics, &
             optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, CS%evap_CFL_limit, &
-            CS%minimum_forcing_depth, cTKE, dSV_dT, dSV_dS, SkinBuoyFlux=SkinBuoyFlux)
+            CS%minimum_forcing_depth, cTKE, dSV_dT, dSV_dS, SkinBuoyFlux=SkinBuoyFlux, MLD=visc%MLD)
 
     if (CS%debug) then
       call hchksum(ent_t, "after applyBoundaryFluxes ent_t", G%HI, haloshift=0, scale=GV%H_to_mks)
@@ -891,7 +891,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
   else
     call applyBoundaryFluxesInOut(CS%diabatic_aux_CSp, G, GV, US, dt, fluxes, CS%optics, &
                                   optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, &
-                                  CS%evap_CFL_limit, CS%minimum_forcing_depth)
+                                  CS%evap_CFL_limit, CS%minimum_forcing_depth, MLD=visc%MLD)
 
     ! Find the vertical distances across layers, which may have been modified by the net surface flux
     call thickness_to_dz(h, tv, dz, G, GV, US)
@@ -1384,7 +1384,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
     skinbuoyflux(:,:) = 0.0
     call applyBoundaryFluxesInOut(CS%diabatic_aux_CSp, G, GV, US, dt, fluxes, CS%optics, &
             optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, CS%evap_CFL_limit, &
-            CS%minimum_forcing_depth, cTKE, dSV_dT, dSV_dS, SkinBuoyFlux=SkinBuoyFlux)
+            CS%minimum_forcing_depth, cTKE, dSV_dT, dSV_dS, SkinBuoyFlux=SkinBuoyFlux, MLD=visc%MLD)
 
     if (CS%debug) then
       call hchksum(ent_t, "after applyBoundaryFluxes ent_t", G%HI, haloshift=0, scale=GV%H_to_m)
@@ -1438,7 +1438,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
   else
     call applyBoundaryFluxesInOut(CS%diabatic_aux_CSp, G, GV, US, dt, fluxes, CS%optics, &
                                   optics_nbands(CS%optics), h, tv, CS%aggregate_FW_forcing, &
-                                  CS%evap_CFL_limit, CS%minimum_forcing_depth)
+                                  CS%evap_CFL_limit, CS%minimum_forcing_depth, MLD=visc%MLD)
 
   endif   ! endif for CS%use_energetic_PBL
 
