@@ -150,7 +150,7 @@ type, public :: diabatic_CS ; private
                                      !! bottom is at least sqrt(Kd_BBL_tr*dt) over the same distance.
   real    :: Kd_min_tr               !< A minimal diffusivity that should always be
                                      !! applied to tracers, especially in massless layers
-                                     !! near the bottom [H Z T-1 ~> m2 s-1 or kg m-1 s-2].
+                                     !! near the bottom [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   real    :: minimum_forcing_depth   !< The smallest depth over which heat and freshwater
                                      !! fluxes are applied [H ~> m or kg m-2].
   real    :: evap_CFL_limit = 0.8    !< The largest fraction of a layer that can be
@@ -2405,8 +2405,7 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
     do k=nz,2,-1 ; do j=js,je ; do i=is,ie
       if (Kd_extra_S(i,j,K) > 0.0) then
         add_ent = (dt * Kd_extra_S(i,j,K)) / &
-           (0.25 * ((dz(i,j,k-1) + dz(i,j,k)) + (dz_old(i,j,k-1) + dz_old(i,j,k))) + &
-            dz_neglect)
+           (0.25 * ((dz(i,j,k-1) + dz(i,j,k)) + (dz_old(i,j,k-1) + dz_old(i,j,k))) + dz_neglect)
       else
         add_ent = 0.0
       endif

@@ -1088,10 +1088,10 @@ subroutine double_diffusion(tv, h, T_f, S_f, j, G, GV, US, CS, Kd_T_dd, Kd_S_dd)
   type(set_diffusivity_CS), pointer     :: CS  !< Module control structure.
   real, dimension(SZI_(G),SZK_(GV)+1),       &
                             intent(out) :: Kd_T_dd !< Interface double diffusion diapycnal
-                                               !! diffusivity for temp [H Z T-1 ~> m2 s-1 of kg m-1 s-1]
+                                               !! diffusivity for temp [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   real, dimension(SZI_(G),SZK_(GV)+1),       &
                             intent(out) :: Kd_S_dd !< Interface double diffusion diapycnal
-                                               !! diffusivity for saln [H Z T-1 ~> m2 s-1 of kg m-1 s-1]
+                                               !! diffusivity for saln [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
 
   real, dimension(SZI_(G)) :: &
     dRho_dT,  &    ! partial derivatives of density with respect to temperature [R C-1 ~> kg m-3 degC-1]
@@ -1105,7 +1105,7 @@ subroutine double_diffusion(tv, h, T_f, S_f, j, G, GV, US, CS, Kd_T_dd, Kd_S_dd)
 
   real :: Rrho    ! vertical density ratio [nondim]
   real :: diff_dd ! factor for double-diffusion [nondim]
-  real :: Kd_dd   ! The dominant double diffusive diffusivity [H Z T-1 ~> m2 s-1 of kg m-1 s-1]
+  real :: Kd_dd   ! The dominant double diffusive diffusivity [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   real :: prandtl ! flux ratio for diffusive convection regime [nondim]
 
   real, parameter :: Rrho0  = 1.9 ! limit for double-diffusive density ratio [nondim]
@@ -1341,7 +1341,7 @@ subroutine add_drag_diffusivity(h, u, v, tv, fluxes, visc, j, TKE_to_Kd, maxTKE,
               delta_Kd = CS%Kd_max
               Kd_lay(i,k) = Kd_lay(i,k) + delta_Kd
             else
-              Kd_lay(i,k) = (TKE_to_layer + TKE_Ray) * TKE_to_Kd(i,k)
+              Kd_lay(i,k) =  (TKE_to_layer + TKE_Ray) * TKE_to_Kd(i,k)
             endif
             Kd_int(i,K)   = Kd_int(i,K)   + 0.5 * delta_Kd
             Kd_int(i,K+1) = Kd_int(i,K+1) + 0.5 * delta_Kd
@@ -1577,7 +1577,7 @@ subroutine add_MLrad_diffusivity(dz, fluxes, tv, j, Kd_int, G, GV, US, CS, TKE_t
                                                             !! thermodynamic fields.
   integer,                          intent(in)    :: j      !< The j-index to work on
   real, dimension(SZI_(G),SZK_(GV)+1), intent(inout) :: Kd_int !< The diapycnal diffusivity at interfaces
-                                                            !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
+                                                            !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
   type(set_diffusivity_CS),         pointer       :: CS     !< Diffusivity control structure
   real, dimension(SZI_(G),SZK_(GV)), intent(in)   :: TKE_to_Kd !< The conversion rate between the TKE
                                                             !! TKE dissipated within  a layer and the

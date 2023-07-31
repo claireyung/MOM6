@@ -153,7 +153,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), &
                                    optional, intent(inout) :: Kd_aux !< A second diapycnal diffusivity at each
                                                                  !! interface that will also be incremented
-                                                                 !! here [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
+                                                                 !! here [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
 
   ! local variables
   real, dimension(SZK_(GV)) :: rho_lwr !< Adiabatic Water Density [kg m-3], this is a dummy
