@@ -193,7 +193,7 @@ type, public :: ice_shelf_CS ; private
   real :: Rc                             !< critical flux Richardson number.
   logical :: buoy_flux_itt_bug           !< If true, fixes buoyancy iteration bug
   logical :: salt_flux_itt_bug           !< If true, fixes salt iteration bug
-
+  real :: buoy_flux_itt_threshold        !< Buoyancy iteration threshold for convergence
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
              id_tfreeze = -1, id_tfl_shelf = -1, &
@@ -313,6 +313,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   real :: Sb_min, Sb_max ! Minimum and maximum boundary salinities [S ~> ppt]
   real :: dS_min, dS_max ! Minimum and maximum salinity changes [S ~> ppt]
   ! Variables used in iterating for wB_flux.
+  real :: BFit_thresh
   real :: wB_flux_new, dDwB_dwB_in
   real :: I_Gam_T, I_Gam_S
   real :: dG_dwB   ! The derivative of Gam_turb with wB [T3 Z-2 ~> s3 m-2]
@@ -365,6 +366,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   ZETA_N = CS%Zeta_N
   VK = CS%Vk
   RC = CS%Rc
+  BFit_thresh = CS%buoy_flux_itt_threshold
   !first calculate molecular component
   Gam_mol_t = 12.5 * (PR**c2_3) - 6.0
   Gam_mol_s = 12.5 * (SC**c2_3) - 6.0
@@ -570,8 +572,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                 wT_flux = dT_ustar * I_Gam_T
                 wB_flux_new = dB_dS * (dS_ustar * I_Gam_S) + dB_dT * wT_flux
 
-                ! Find the root where wB_flux_new = wB_flux.  Make the 1.0e-4 below into a parameter?
-                if (abs(wB_flux_new - wB_flux) < 1.0e-4*(abs(wB_flux_new) + abs(wB_flux))) exit
+                ! Find the root where wB_flux_new = wB_flux.  
+                if (abs(wB_flux_new - wB_flux) < BFit_thresh*(abs(wB_flux_new) + abs(wB_flux))) exit
 
                 dDwB_dwB_in = dG_dwB * (dB_dS * (dS_ustar * I_Gam_S**2) + &
                                         dB_dT * (dT_ustar * I_Gam_T**2)) - 1.0
@@ -1543,6 +1545,9 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
                  "Bug fix of buoyancy iteration", default=.true.)
   call get_param(param_file, mdl, "ICE_SHELF_SALT_FLUX_ITT_BUG", CS%salt_flux_itt_bug, &
                  "Bug fix of salt iteration", default=.true.)
+  call get_param(param_file, mdl, "ICE_SHELF_BUOYANCY_FLUX_ITT_THRESHOLD", CS%buoy_flux_itt_threshold, &
+                 "Convergence criterion of Newton's method for ice shelf "//&
+                 "buoyancy iteration.", units="none", default=1.0e-4)
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
     ! assuming frazil is enabled in ocean. This could break some configurations?
