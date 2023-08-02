@@ -2049,10 +2049,10 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   integer :: first_direction   ! An integer that indicates which direction is to be
                                ! updated first in directionally split parts of the
                                ! calculation.
-  logical :: use_KPP           ! If true, diabatic is using KPP vertical mixing
   logical :: non_Bous          ! If true, this run is fully non-Boussinesq
   logical :: Boussinesq        ! If true, this run is fully Boussinesq
   logical :: semi_Boussinesq   ! If true, this run is partially non-Boussinesq
+  logical :: use_KPP           ! If true, diabatic is using KPP vertical mixing
   integer :: nkml, nkbl, verbosity, write_geom
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
