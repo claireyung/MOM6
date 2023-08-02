@@ -262,7 +262,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                !! This is computed as part of the ISOMIP diagnostics.
   real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
   real, parameter :: VK    = 0.40 !< Von Karman's constant - dimensionless
-  real :: ZETA_N = 0.13 !> The fraction of the boundary layer over which the
+  real :: ZETA_N  !> The fraction of the boundary layer over which the
                !! viscosity is linearly increasing [nondim]. 
                !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
                !! divided by the von Karman constant VK. Was 1/8.
@@ -1517,7 +1517,11 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "READ_TIDEAMP", read_TIDEAMP, &
                  "If true, read a file (given by TIDEAMP_FILE) containing "//&
                  "the tidal amplitude with INT_TIDE_DISSIPATION.", default=.false.)
-
+  call get_param(param_file, md1, "ZETA_N", CS%ZETA_N, &
+                 "Ratio of HJ99 stability constant xi_N (ratio of maximum "//&
+                 "mixing length to planetary boundary layer depth in "//&
+                 "neutrally stable conditions to the von Karman constant", &
+                 units="none", default=0.013)
 
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
