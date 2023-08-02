@@ -1517,15 +1517,15 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "READ_TIDEAMP", read_TIDEAMP, &
                  "If true, read a file (given by TIDEAMP_FILE) containing "//&
                  "the tidal amplitude with INT_TIDE_DISSIPATION.", default=.false.)
-  call get_param(param_file, md1, "ZETA_N", CS%ZETA_N, &
+  call get_param(param_file, md1, "ICE_SHELF_LINEAR_SHELF_FRAC", CS%ZETA_N, &
                  "Ratio of HJ99 stability constant xi_N (ratio of maximum "//&
                  "mixing length to planetary boundary layer depth in "//&
                  "neutrally stable conditions to the von Karman constant", &
                  units="none", default=0.013)
-  call get_param(param_file, md1, "VK", CS%VK, &
+  call get_param(param_file, md1, "ICE_SHELF_VK_CNST", CS%VK, &
                  "Von Karman constant.", &
                  units="none", default=0.40)
-  call get_param(param_file, md1, "RC", CS%RC, &
+  call get_param(param_file, md1, "ICE_SHELF_RC", CS%RC, &
                  "Critical flux Richardson number for ice melt ", &
                  units="none", default=0.20)
 
