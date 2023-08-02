@@ -185,6 +185,15 @@ type, public :: ice_shelf_CS ; private
                                          !! salinity [C S-1 ~> degC ppt-1]
   real    :: dTFr_dp                     !< Partial derivative of freezing temperature with
                                          !! pressure [C T2 R-1 L-2 ~> degC Pa-1]
+  real :: VK                             !< Von Karman's constant - dimensionless
+  real :: ZETA_N                         !< The fraction of the boundary layer over which the
+                                         !! viscosity is linearly increasing [nondim]. 
+                                         !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
+                                         !! divided by the von Karman constant VK. Was 1/8.
+  real :: RC                             !< critical flux Richardson number.
+  logical :: buoy_flux_itt_bug           !< If true, fixes buoyancy iteration bug
+  logical :: salt_flux_itt_bug           !< If true, fixes salt iteration bug
+
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
              id_tfreeze = -1, id_tfl_shelf = -1, &
@@ -261,12 +270,6 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                !! interface, positive for melting and negative for freezing [S ~> ppt].
                !! This is computed as part of the ISOMIP diagnostics.
   real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
-  real :: VK     !< Von Karman's constant - dimensionless
-  real :: ZETA_N  !> The fraction of the boundary layer over which the
-               !! viscosity is linearly increasing [nondim]. 
-               !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
-               !! divided by the von Karman constant VK. Was 1/8.
-  real :: RC     ! critical flux Richardson number.
   real :: I_ZETA_N !< The inverse of ZETA_N [nondim].
   real :: I_LF     !< The inverse of the latent heat of fusion [Q-1 ~> kg J-1].
   real :: I_VK     !< The inverse of the Von Karman constant [nondim].
@@ -317,8 +320,6 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   logical :: update_ice_vel ! If true, it is time to update the ice shelf velocities.
   logical :: coupled_GL     ! If true, the grounding line position is determined based on
                             ! coupled ice-ocean dynamics.
-  logical :: buoy_flux_itt_bug ! If true, fixes buoyancy iteration bug
-  logical :: salt_flux_itt_bug ! If true, fixes salt iteration bug
   real, parameter :: c2_3 = 2.0/3.0
   character(len=160) :: mesg  ! The text of an error message
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
