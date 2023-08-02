@@ -71,7 +71,7 @@ type, public :: vertvisc_CS ; private
   real    :: alpha_gl90      !< Coefficient used to compute a depth-independent GL90 vertical
                              !! viscosity via Kv_gl90 = alpha_gl90 * f^2. Note that the implied
                              !! Kv_gl90 corresponds to a kappa_gl90 that scales as N^2 with depth.
-                             !! [Z H T ~> m2 s or kg s m-1]
+                             !! [H Z T ~> m2 s or kg s m-1]
   real    :: maxvel          !< Velocity components greater than maxvel are truncated [L T-1 ~> m s-1].
   real    :: vel_underflow   !< Velocity components smaller than vel_underflow
                              !! are set to 0 [L T-1 ~> m s-1].
@@ -1043,7 +1043,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   a_cpl_max = 1.0e37 * GV%m_to_H * US%T_to_s
   I_Hbbl(:) = 1.0 / (CS%Hbbl + dz_neglect)
   if (CS%use_GL90_in_SSW) then
-    I_Hbbl_gl90 = 1.0 / (CS%Hbbl_gl90 + dz_neglect)
+    I_Hbbl_gl90(:) = 1.0 / (CS%Hbbl_gl90 + dz_neglect)
   endif
   I_valBL = 0.0 ; if (CS%harm_BL_val > 0.0) I_valBL = 1.0 / CS%harm_BL_val
 
@@ -1069,9 +1069,10 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
 
   call find_ustar(forces, tv, Ustar_2d, G, GV, US, halo=1)
 
-  !$OMP parallel do default(private) shared(G,GV,US,CS,visc,Isq,Ieq,nz,u,h,forces,Ustar_2d,hML_u, &
-  !$OMP                                     OBC,h_neglect,dz_neglect,dt,I_valBL,Kv_u,a_cpl_max) &
-  !$OMP                     firstprivate(i_hbbl)
+  !$OMP parallel do default(private) shared(G,GV,US,CS,tv,visc,OBC,Isq,Ieq,nz,u,h,dz,forces, &
+  !$OMP                                     Ustar_2d,h_neglect,dz_neglect,dt,I_valBL,hML_u,Kv_u, &
+  !$OMP                                     a_cpl_max,I_Hbbl_gl90,Kv_gl90_u) &
+  !$OMP                              firstprivate(I_Hbbl)
   do j=G%Jsc,G%Jec
     do I=Isq,Ieq ; do_i(I) = (G%mask2dCu(I,j) > 0.0) ; enddo
 
@@ -1279,9 +1280,10 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
 
 
   ! Now work on v-points.
-  !$OMP parallel do default(private) shared(G,GV,CS,US,visc,is,ie,Jsq,Jeq,nz,v,h,forces,hML_v, &
-  !$OMP                                  OBC,h_neglect,dz_neglect,dt,I_valBL,Kv_v,a_cpl_max) &
-  !$OMP                     firstprivate(i_hbbl)
+  !$OMP parallel do default(private) shared(G,GV,US,CS,tv,OBC,visc,is,ie,Jsq,Jeq,nz,v,h,dz,forces, &
+  !$OMP                                     Ustar_2d,h_neglect,dz_neglect,dt,I_valBL,hML_v,Kv_v, &
+  !$OMP                                     a_cpl_max,I_Hbbl_gl90,Kv_gl90_v) &
+  !$OMP                              firstprivate(I_Hbbl)
   do J=Jsq,Jeq
     do i=is,ie ; do_i(i) = (G%mask2dCv(i,J) > 0.0) ; enddo
 
@@ -1340,7 +1342,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
           hvel(i,k) = (1.0-botfn)*h_harm(i,k) + botfn*h_arith(i,k)
           dz_vel(i,k) = (1.0-botfn)*dz_harm(i,k) + botfn*dz_arith(i,k)
         endif
-        z_i(i,k) = z_i(i,k+1)  + dz_harm(i,k)*I_Hbbl(i)
+        z_i(i,k) = z_i(i,k+1) + dz_harm(i,k)*I_Hbbl(i)
       endif ; enddo ; enddo ! i & k loops
     else ! Not harmonic_visc
       do i=is,ie
@@ -1998,7 +2000,7 @@ subroutine find_coupling_coef(a_cpl, hvel, do_i, h_harm, bbl_thick, kv_bbl, z_i,
         ! and be further limited by rotation to give the natural Ekman length.
         ! The following expressions are mathematically equivalent.
         if (GV%Boussinesq .or. (CS%answer_date < 20230601)) then
-          visc_ml = GV%Z_to_H*u_star(i) * CS%vonKar * (temp1*u_star(i)) / &
+          visc_ml = u_star(i) * CS%vonKar * (GV%Z_to_H*temp1*u_star(i)) / &
                              (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
         else
           visc_ml = CS%vonKar * (temp1*tau_mag(i)) / (absf(i)*temp1 + (h_ml(i)+h_neglect)*u_star(i))
@@ -2105,7 +2107,7 @@ subroutine vertvisc_limit_vel(u, v, h, ADp, CDp, forces, visc, dt, G, GV, US, CS
     enddo ! j-loop
   else  ! Do not report accelerations leading to large velocities.
     if (CS%CFL_based_trunc) then
-!$OMP parallel do default(none) shared(nz,js,je,Isq,Ieq,u,dt,G,CS,h,H_report)
+      !$OMP parallel do default(shared)
       do k=1,nz ; do j=js,je ; do I=Isq,Ieq
         if (abs(u(I,j,k)) < CS%vel_underflow) then ; u(I,j,k) = 0.0
         elseif ((u(I,j,k) * (dt * G%dy_Cu(I,j))) * G%IareaT(i+1,j) < -CS%CFL_trunc) then
@@ -2117,7 +2119,7 @@ subroutine vertvisc_limit_vel(u, v, h, ADp, CDp, forces, visc, dt, G, GV, US, CS
         endif
       enddo ; enddo ; enddo
     else
-!$OMP parallel do default(none) shared(nz,js,je,Isq,Ieq,u,G,CS,truncvel,maxvel,h,H_report)
+      !$OMP parallel do default(shared)
       do k=1,nz ; do j=js,je ; do I=Isq,Ieq
         if (abs(u(I,j,k)) < CS%vel_underflow) then ; u(I,j,k) = 0.0
         elseif (abs(u(I,j,k)) > maxvel) then
