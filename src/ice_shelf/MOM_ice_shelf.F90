@@ -317,7 +317,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   logical :: update_ice_vel ! If true, it is time to update the ice shelf velocities.
   logical :: coupled_GL     ! If true, the grounding line position is determined based on
                             ! coupled ice-ocean dynamics.
-
+  logical :: buoy_flux_itt_bug ! If true, fixes buoyancy iteration bug
+  logical :: salt_flux_itt_bug ! If true, fixes salt iteration bug
   real, parameter :: c2_3 = 2.0/3.0
   character(len=160) :: mesg  ! The text of an error message
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
@@ -568,7 +569,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                 ! This is Newton's method without any bounds.  Should bounds be needed?
                 wB_flux_new = wB_flux - (wB_flux_new - wB_flux) / dDwB_dwB_in
                 ! Update wB_flux
-                wB_flux = wB_flux_new
+                if (CS%buoy_flux_itt_bug) wB_flux = wB_flux_new
               enddo !it3
             endif
 
@@ -640,7 +641,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
               else
                 Sbdry(i,j) = Sbdry_it
               endif ! Sb_min_set
-
+              
+              if (.not.CS%salt_flux_itt_bug) Sbdry(i,j) = Sbdry_it
             endif ! CS%find_salt_root
 
           enddo !it1
@@ -1528,7 +1530,10 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, md1, "ICE_SHELF_RC", CS%RC, &
                  "Critical flux Richardson number for ice melt ", &
                  units="none", default=0.20)
-
+  call get_param(param_file, md1, "ICE_SHELF_BUOYANCY_FLUX_ITT_BUG", CS&buoy_flux_itt_bug, &
+                 "Bug fix of buoyancy iteration", default=.true.)
+  call get_param(param_file, md1, "ICE_SHELF_SALT_FLUX_ITT_BUG", CS&salt_flux_itt_bug, &
+                 "Bug fix of salt iteration", default=.true.)
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
     ! assuming frazil is enabled in ocean. This could break some configurations?
