@@ -185,12 +185,12 @@ type, public :: ice_shelf_CS ; private
                                          !! salinity [C S-1 ~> degC ppt-1]
   real    :: dTFr_dp                     !< Partial derivative of freezing temperature with
                                          !! pressure [C T2 R-1 L-2 ~> degC Pa-1]
-  real :: VK                             !< Von Karman's constant - dimensionless
-  real :: ZETA_N                         !< The fraction of the boundary layer over which the
+  real :: Vk                             !< Von Karman's constant - dimensionless
+  real :: Zeta_N                         !< The fraction of the boundary layer over which the
                                          !! viscosity is linearly increasing [nondim]. 
                                          !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
                                          !! divided by the von Karman constant VK. Was 1/8.
-  real :: RC                             !< critical flux Richardson number.
+  real :: Rc                             !< critical flux Richardson number.
   logical :: buoy_flux_itt_bug           !< If true, fixes buoyancy iteration bug
   logical :: salt_flux_itt_bug           !< If true, fixes salt iteration bug
 
@@ -270,6 +270,12 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                !! interface, positive for melting and negative for freezing [S ~> ppt].
                !! This is computed as part of the ISOMIP diagnostics.
   real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
+  real :: VK       !< Von Karman's constant - dimensionless
+  real :: ZETA_N   !> The fraction of the boundary layer over which the
+                   !! viscosity is linearly increasing [nondim]. 
+                   !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
+                   !! divided by the von Karman constant VK. Was 1/8.
+  real :: RC       !! critical flux Richardson number.
   real :: I_ZETA_N !< The inverse of ZETA_N [nondim].
   real :: I_LF     !< The inverse of the latent heat of fusion [Q-1 ~> kg J-1].
   real :: I_VK     !< The inverse of the Von Karman constant [nondim].
@@ -356,7 +362,9 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   PR = CS%kv_molec/CS%kd_molec_temp
   I_VK = 1.0/VK
   RhoCp = CS%Rho_ocn * CS%Cp
-
+  ZETA_N = CS%Zeta_N
+  VK = CS%Vk
+  RC = CS%Rc
   !first calculate molecular component
   Gam_mol_t = 12.5 * (PR**c2_3) - 6.0
   Gam_mol_s = 12.5 * (SC**c2_3) - 6.0
@@ -1520,20 +1528,20 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "READ_TIDEAMP", read_TIDEAMP, &
                  "If true, read a file (given by TIDEAMP_FILE) containing "//&
                  "the tidal amplitude with INT_TIDE_DISSIPATION.", default=.false.)
-  call get_param(param_file, md1, "ICE_SHELF_LINEAR_SHELF_FRAC", CS%ZETA_N, &
+  call get_param(param_file, mdl, "ICE_SHELF_LINEAR_SHELF_FRAC", CS%Zeta_N, &
                  "Ratio of HJ99 stability constant xi_N (ratio of maximum "//&
                  "mixing length to planetary boundary layer depth in "//&
                  "neutrally stable conditions to the von Karman constant", &
                  units="none", default=0.013)
-  call get_param(param_file, md1, "ICE_SHELF_VK_CNST", CS%VK, &
+  call get_param(param_file, mdl, "ICE_SHELF_VK_CNST", CS%Vk, &
                  "Von Karman constant.", &
                  units="none", default=0.40)
-  call get_param(param_file, md1, "ICE_SHELF_RC", CS%RC, &
+  call get_param(param_file, mdl, "ICE_SHELF_RC", CS%Rc, &
                  "Critical flux Richardson number for ice melt ", &
                  units="none", default=0.20)
-  call get_param(param_file, md1, "ICE_SHELF_BUOYANCY_FLUX_ITT_BUG", CS&buoy_flux_itt_bug, &
+  call get_param(param_file, mdl, "ICE_SHELF_BUOYANCY_FLUX_ITT_BUG", CS%buoy_flux_itt_bug, &
                  "Bug fix of buoyancy iteration", default=.true.)
-  call get_param(param_file, md1, "ICE_SHELF_SALT_FLUX_ITT_BUG", CS&salt_flux_itt_bug, &
+  call get_param(param_file, mdl, "ICE_SHELF_SALT_FLUX_ITT_BUG", CS%salt_flux_itt_bug, &
                  "Bug fix of salt iteration", default=.true.)
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
