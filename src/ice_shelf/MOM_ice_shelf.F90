@@ -185,6 +185,8 @@ type, public :: ice_shelf_CS ; private
                                          !! salinity [C S-1 ~> degC ppt-1]
   real    :: dTFr_dp                     !< Partial derivative of freezing temperature with
                                          !! pressure [C T2 R-1 L-2 ~> degC Pa-1]
+  real    :: Zeta_N                      !< The stability constant \xi_N = 0.052 from Holland & Jenkins '99
+                                         !! divided by the von Karman constant VK. Was 1/8.
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
              id_tfreeze = -1, id_tfl_shelf = -1, &
@@ -262,10 +264,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                !! This is computed as part of the ISOMIP diagnostics.
   real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
   real, parameter :: VK    = 0.40 !< Von Karman's constant - dimensionless
-  real :: ZETA_N = 0.13 !> The fraction of the boundary layer over which the
-               !! viscosity is linearly increasing [nondim]. 
-               !! This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
-               !! divided by the von Karman constant VK. Was 1/8.
+  real :: ZETA_N !> This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
+               !! divided by the von Karman constant VK. Was 1/8. [nondim]
   real, parameter :: RC    = 0.20     ! critical flux Richardson number.
   real :: I_ZETA_N !< The inverse of ZETA_N [nondim].
   real :: I_LF     !< The inverse of the latent heat of fusion [Q-1 ~> kg J-1].
@@ -348,6 +348,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   endif
   ! useful parameters
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; ied = G%ied ; jed = G%jed
+  ZETA_N = CS%Zeta_N  
   I_ZETA_N = 1.0 / ZETA_N
   I_LF = 1.0 / CS%Lat_fusion
   SC = CS%kv_molec/CS%kd_molec_salt
@@ -1517,7 +1518,11 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "READ_TIDEAMP", read_TIDEAMP, &
                  "If true, read a file (given by TIDEAMP_FILE) containing "//&
                  "the tidal amplitude with INT_TIDE_DISSIPATION.", default=.false.)
-
+  call get_param(param_file, mdl, "ICE_SHELF_LINEAR_SHELF_FRAC", CS%Zeta_N, &
+                 "Ratio of HJ99 stability constant xi_N (ratio of maximum "//&
+                 "mixing length to planetary boundary layer depth in "//&
+                 "neutrally stable conditions to the von Karman constant", &
+                 units="nondim", default=0.13)
 
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
