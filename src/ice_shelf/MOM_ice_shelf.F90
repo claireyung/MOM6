@@ -189,6 +189,8 @@ type, public :: ice_shelf_CS ; private
                                          !! divided by the von Karman constant VK. Was 1/8.
   real :: Vk                             !< Von Karman's constant - dimensionless
   real :: Rc                             !< critical flux Richardson number.
+  logical :: buoy_flux_itt_bug           !< If true, fixes buoyancy iteration bug
+  logical :: salt_flux_itt_bug           !< If true, fixes salt iteration bug
 
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
@@ -574,7 +576,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                 ! This is Newton's method without any bounds.  Should bounds be needed?
                 wB_flux_new = wB_flux - (wB_flux_new - wB_flux) / dDwB_dwB_in
                 ! Update wB_flux
-                wB_flux = wB_flux_new
+                if (CS%buoy_flux_itt_bug) wB_flux = wB_flux_new
               enddo !it3
             endif
 
@@ -646,6 +648,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
               else
                 Sbdry(i,j) = Sbdry_it
               endif ! Sb_min_set
+              
+              if (.not.CS%salt_flux_itt_bug) Sbdry(i,j) = Sbdry_it
 
             endif ! CS%find_salt_root
 
@@ -1534,6 +1538,10 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "ICE_SHELF_RC", CS%Rc, &
                  "Critical flux Richardson number for ice melt ", &
                  units="nondim", default=0.20)
+  call get_param(param_file, mdl, "ICE_SHELF_BUOYANCY_FLUX_ITT_BUG", CS%buoy_flux_itt_bug, &
+                 "Bug fix of buoyancy iteration", default=.true.)
+  call get_param(param_file, mdl, "ICE_SHELF_SALT_FLUX_ITT_BUG", CS%salt_flux_itt_bug, &
+                 "Bug fix of salt iteration", default=.true.)
 
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
