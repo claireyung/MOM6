@@ -1531,7 +1531,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "ICE_SHELF_LINEAR_SHELF_FRAC", CS%Zeta_N, &
                  "Ratio of HJ99 stability constant xi_N (ratio of maximum "//&
                  "mixing length to planetary boundary layer depth in "//&
-                 "neutrally stable conditions to the von Karman constant", &
+                 "neutrally stable conditions) to the von Karman constant", &
                  units="nondim", default=0.13)
   call get_param(param_file, mdl, "ICE_SHELF_VK_CNST", CS%Vk, &
                  "Von Karman constant.", &
