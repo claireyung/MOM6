@@ -388,7 +388,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
   ! if (CS%id_Mixing_Length>0) CS%Mixing_Length(:,:,:) = 0.0
   ! if (CS%id_Velocity_Scale>0) CS%Velocity_Scale(:,:,:) = 0.0
 
-  !!OMP parallel do default(private) shared(js,je,nz,is,ie,h_3d,dz_3d,u_3d,v_3d,tv,dt,I_dt, &
+  !!OMP parallel do default(private) shared(js,je,nz,is,ie,h_3d,u_3d,v_3d,tv,dt,I_dt, &
   !!OMP                                  CS,G,GV,US,fluxes,TKE_forced,dSV_dT,dSV_dS,Kd_int)
   do j=js,je
     ! Copy the thicknesses and other fields to 2-d arrays.
@@ -467,7 +467,7 @@ subroutine energetic_PBL(h_3d, u_3d, v_3d, tv, fluxes, dt, Kd_int, G, GV, US, CS
 
       ! Perhaps provide a first guess for MLD based on a stored previous value.
       MLD_io = -1.0
-      if (CS%MLD_iteration_guess .and. (CS%ML_Depth(i,j) > 0.0))  MLD_io = CS%ML_depth(i,j)
+      if (CS%MLD_iteration_guess .and. (CS%ML_depth(i,j) > 0.0))  MLD_io = CS%ML_depth(i,j)
 
       if (stoch_CS%pert_epbl) then ! stochastics are active
         call ePBL_column(h, dz, u, v, T0, S0, dSV_dT_1d, dSV_dS_1d, SpV_dt, TKE_forcing, B_flux, absf, &
@@ -2007,7 +2007,7 @@ subroutine energetic_PBL_get_MLD(CS, MLD, G, US, m_to_MLD_units)
   scale = 1.0 ; if (present(m_to_MLD_units)) scale = US%Z_to_m * m_to_MLD_units
 
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
-    MLD(i,j) = scale*CS%ML_Depth(i,j)
+    MLD(i,j) = scale*CS%ML_depth(i,j)
   enddo ; enddo
 
 end subroutine energetic_PBL_get_MLD

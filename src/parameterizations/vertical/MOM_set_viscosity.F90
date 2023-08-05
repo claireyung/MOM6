@@ -29,7 +29,7 @@ use MOM_restart,       only : register_restart_field_as_obsolete
 use MOM_safe_alloc,    only : safe_alloc_ptr, safe_alloc_alloc
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : thermo_var_ptrs, vertvisc_type, porous_barrier_type
-use MOM_verticalGrid,  only : verticalGrid_type, get_thickness_units
+use MOM_verticalGrid,  only : verticalGrid_type
 
 implicit none ; private
 
@@ -437,7 +437,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   if (allocated(visc%Ray_u)) visc%Ray_u(:,:,:) = 0.0
   if (allocated(visc%Ray_v)) visc%Ray_v(:,:,:) = 0.0
 
-  !$OMP parallel do default(private) shared(u,v,h,tv,visc,G,GV,US,CS,Rml,nz,nkmb,nkml,K2, &
+  !$OMP parallel do default(private) shared(u,v,h,dz,tv,visc,G,GV,US,CS,Rml,nz,nkmb,nkml,K2, &
   !$OMP                                     Isq,Ieq,Jsq,Jeq,h_neglect,dz_neglect,Rho0x400_G,C2pi_3, &
   !$OMP                                     U_bg_sq,cdrag_sqrt,cdrag_sqrt_H,cdrag_sqrt_H_RL, &
   !$OMP                                     cdrag_L_to_H,cdrag_RL_to_H,use_BBL_EOS,BBL_thick_max, &
@@ -465,7 +465,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
     if (m==1) then ! u-points
       do k=1,nz ; do I=is,ie
         if (do_i(I)) then
-          if (u(I,j,k) *(h(i+1,j,k) - h(i,j,k)) >= 0) then
+          if (u(I,j,k) * (h(i+1,j,k) - h(i,j,k)) >= 0) then
             ! If the flow is from thin to thick then bias towards the thinner thickness
             h_at_vel(I,k) = 2.0*h(i,j,k)*h(i+1,j,k) / &
                             (h(i,j,k) + h(i+1,j,k) + h_neglect)
@@ -1517,10 +1517,10 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
     endif
   enddo ; endif
 
-  !$OMP parallel do default(private) shared(u,v,h,tv,forces,visc,dt,G,GV,US,CS,use_EOS,dt_Rho0, &
+  !$OMP parallel do default(private) shared(u,v,h,dz,tv,forces,visc,dt,G,GV,US,CS,use_EOS,dt_Rho0, &
   !$OMP                                     nonBous_ML,h_neglect,dz_neglect,h_tiny,g_H_Rho0, &
-  !$OMP                                     js,je,OBC,Isq,Ieq,nz,nkml,U_bg_sq,mask_v, &
-  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,Rho0x400_G)
+  !$OMP                                     js,je,OBC,Isq,Ieq,nz,nkml,U_star_2d,U_bg_sq,mask_v, &
+  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,cdrag_sqrt_H_RL,Rho0x400_G)
   do j=js,je  ! u-point loop
     if (CS%dynamic_viscous_ML) then
       do_any = .false.
@@ -1643,7 +1643,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
 
     if (do_any_shelf) then
       do k=1,nz ; do I=Isq,Ieq ; if (do_i(I)) then
-        if (u(I,j,k) *(h(i+1,j,k) - h(i,j,k)) >= 0) then
+        if (u(I,j,k) * (h(i+1,j,k) - h(i,j,k)) >= 0) then
           h_at_vel(i,k) = 2.0*h(i,j,k)*h(i+1,j,k) / &
                           (h(i,j,k) + h(i+1,j,k) + h_neglect)
           dz_at_vel(i,k) = 2.0*dz(i,j,k)*dz(i+1,j,k) / &
@@ -1787,10 +1787,10 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
 
   enddo ! j-loop at u-points
 
-  !$OMP parallel do default(private) shared(u,v,h,tv,forces,visc,dt,G,GV,US,CS,use_EOS,dt_Rho0, &
-  !$OMP                                     h_neglect,h_tiny,g_H_Rho0,is,ie,OBC,Jsq,Jeq,nz, &
-  !$OMP                                     U_bg_sq,cdrag_sqrt,cdrag_sqrt_H,cdrag_sqrt_H_RL, &
-  !$OMP                                     Rho0x400_G,nkml,mask_u)
+  !$OMP parallel do default(private) shared(u,v,h,dz,tv,forces,visc,dt,G,GV,US,CS,use_EOS,dt_Rho0, &
+  !$OMP                                     nonBous_ML,h_neglect,dz_neglect,h_tiny,g_H_Rho0, &
+  !$OMP                                     is,ie,OBC,Jsq,Jeq,nz,nkml,U_bg_sq,U_star_2d,mask_u, &
+  !$OMP                                     cdrag_sqrt,cdrag_sqrt_H,cdrag_sqrt_H_RL,Rho0x400_G)
   do J=Jsq,Jeq  ! v-point loop
     if (CS%dynamic_viscous_ML) then
       do_any = .false.
