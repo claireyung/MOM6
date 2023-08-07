@@ -179,7 +179,19 @@ type, public :: ice_shelf_CS ; private
   real    :: TFr_0_0                     !< The freezing point at 0 pressure and 0 salinity [degC]
   real    :: dTFr_dS                     !< Partial derivative of freezing temperature with salinity [degC ppt-1]
   real    :: dTFr_dp                     !< Partial derivative of freezing temperature with
+<<<<<<< HEAD
                                          !! pressure [degC T2 R-1 L-2 ~> degC Pa-1]
+=======
+                                         !! pressure [C T2 R-1 L-2 ~> degC Pa-1]
+  real    :: Zeta_N                      !< The stability constant xi_N = 0.052 from Holland & Jenkins '99
+                                         !! divided by the von Karman constant VK. Was 1/8.
+  real :: Vk                             !< Von Karman's constant - dimensionless
+  real :: Rc                             !< critical flux Richardson number.
+  logical :: buoy_flux_itt_bug           !< If true, fixes buoyancy iteration bug
+  logical :: salt_flux_itt_bug           !< If true, fixes salt iteration bug
+  real :: buoy_flux_itt_threshold        !< Buoyancy iteration threshold for convergence
+
+>>>>>>> 8f7cc0e19 (Ice shelf melt parameterization fixes (#395))
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
              id_tfreeze = -1, id_tfl_shelf = -1, &
@@ -254,10 +266,18 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step, CS)
     haline_driving !< (SSS - S_boundary) ice-ocean
                !! interface, positive for melting and negative for freezing [ppt].
                !! This is computed as part of the ISOMIP diagnostics.
+<<<<<<< HEAD
   real, parameter :: VK    = 0.40 !< Von Karman's constant - dimensionless
   real :: ZETA_N = 0.052 !> The fraction of the boundary layer over which the
                !! viscosity is linearly increasing [nondim]. (Was 1/8. Why?)
   real, parameter :: RC    = 0.20     ! critical flux Richardson number.
+=======
+  real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
+  real :: VK       !< Von Karman's constant - dimensionless
+  real :: ZETA_N   !< This is the stability constant xi_N = 0.052 from Holland & Jenkins '99
+                   !! divided by the von Karman constant VK. Was 1/8. [nondim]
+  real :: RC       !< critical flux Richardson number.
+>>>>>>> 8f7cc0e19 (Ice shelf melt parameterization fixes (#395))
   real :: I_ZETA_N !< The inverse of ZETA_N [nondim].
   real :: I_LF     !< The inverse of the latent heat of fusion [Q-1 ~> kg J-1].
   real :: I_VK     !< The inverse of the Von Karman constant [nondim].
@@ -333,6 +353,9 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step, CS)
   endif
   ! useful parameters
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; ied = G%ied ; jed = G%jed
+  ZETA_N = CS%Zeta_N
+  VK = CS%Vk
+  RC = CS%Rc
   I_ZETA_N = 1.0 / ZETA_N
   I_LF = 1.0 / CS%Lat_fusion
   SC = CS%kv_molec/CS%kd_molec_salt
@@ -514,7 +537,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step, CS)
             if (wB_flux < 0.0) then
               ! The buoyancy flux is stabilizing and will reduce the tubulent
               ! fluxes, and iteration is required.
-              n_star_term = (ZETA_N/RC) * (hBL_neut * VK) / (ustar_h)**3
+              n_star_term = (ZETA_N * hBL_neut * VK) / (RC * ustar_h**3)
               do it3 = 1,30
                ! n_star <= 1.0 is the ratio of working boundary layer thickness
                ! to the neutral thickness.
@@ -545,13 +568,15 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step, CS)
                 wT_flux = dT_ustar * I_Gam_T
                 wB_flux_new = dB_dS * (dS_ustar * I_Gam_S) + dB_dT * wT_flux
 
-                ! Find the root where wB_flux_new = wB_flux.  Make the 1.0e-4 below into a parameter?
-                if (abs(wB_flux_new - wB_flux) < 1.0e-4*(abs(wB_flux_new) + abs(wB_flux))) exit
+                ! Find the root where wB_flux_new = wB_flux.
+                if (abs(wB_flux_new - wB_flux) < CS%buoy_flux_itt_threshold*(abs(wB_flux_new) + abs(wB_flux))) exit
 
                 dDwB_dwB_in = dG_dwB * (dB_dS * (dS_ustar * I_Gam_S**2) + &
                                         dB_dT * (dT_ustar * I_Gam_T**2)) - 1.0
                 ! This is Newton's method without any bounds.  Should bounds be needed?
                 wB_flux_new = wB_flux - (wB_flux_new - wB_flux) / dDwB_dwB_in
+                ! Update wB_flux
+                if (CS%buoy_flux_itt_bug) wB_flux = wB_flux_new
               enddo !it3
             endif
 
@@ -625,7 +650,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step, CS)
                 Sbdry(i,j) = Sbdry_it
               endif ! Sb_min_set
 
-              Sbdry(i,j) = Sbdry_it
+              if (.not.CS%salt_flux_itt_bug) Sbdry(i,j) = Sbdry_it
+
             endif ! CS%find_salt_root
 
           enddo !it1
@@ -1496,7 +1522,24 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "READ_TIDEAMP", read_TIDEAMP, &
                  "If true, read a file (given by TIDEAMP_FILE) containing "//&
                  "the tidal amplitude with INT_TIDE_DISSIPATION.", default=.false.)
-
+  call get_param(param_file, mdl, "ICE_SHELF_LINEAR_SHELF_FRAC", CS%Zeta_N, &
+                 "Ratio of HJ99 stability constant xi_N (ratio of maximum "//&
+                 "mixing length to planetary boundary layer depth in "//&
+                 "neutrally stable conditions) to the von Karman constant", &
+                 units="nondim", default=0.13)
+  call get_param(param_file, mdl, "ICE_SHELF_VK_CNST", CS%Vk, &
+                 "Von Karman constant.", &
+                 units="nondim", default=0.40)
+  call get_param(param_file, mdl, "ICE_SHELF_RC", CS%Rc, &
+                 "Critical flux Richardson number for ice melt ", &
+                 units="nondim", default=0.20)
+  call get_param(param_file, mdl, "ICE_SHELF_BUOYANCY_FLUX_ITT_BUG", CS%buoy_flux_itt_bug, &
+                 "Bug fix of buoyancy iteration", default=.true.)
+  call get_param(param_file, mdl, "ICE_SHELF_SALT_FLUX_ITT_BUG", CS%salt_flux_itt_bug, &
+                 "Bug fix of salt iteration", default=.true.)
+  call get_param(param_file, mdl, "ICE_SHELF_BUOYANCY_FLUX_ITT_THRESHOLD", CS%buoy_flux_itt_threshold, &
+                 "Convergence criterion of Newton's method for ice shelf "//&
+                 "buoyancy iteration.", units="nondim", default=1.0e-4)
 
   if (PRESENT(sfc_state_in)) then
     allocate(sfc_state)
