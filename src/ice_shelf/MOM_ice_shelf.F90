@@ -185,7 +185,7 @@ type, public :: ice_shelf_CS ; private
                                          !! salinity [C S-1 ~> degC ppt-1]
   real    :: dTFr_dp                     !< Partial derivative of freezing temperature with
                                          !! pressure [C T2 R-1 L-2 ~> degC Pa-1]
-  real    :: Zeta_N                      !< The stability constant \xi_N = 0.052 from Holland & Jenkins '99
+  real    :: Zeta_N                      !< The stability constant xi_N = 0.052 from Holland & Jenkins '99
                                          !! divided by the von Karman constant VK. Was 1/8.
   real :: Vk                             !< Von Karman's constant - dimensionless
   real :: Rc                             !< critical flux Richardson number.
@@ -270,7 +270,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                !! This is computed as part of the ISOMIP diagnostics.
   real :: time_step !< Length of time over which these fluxes will be applied [T ~> s].
   real :: VK       !< Von Karman's constant - dimensionless
-  real :: ZETA_N   !< This is the stability constant \xi_N = 0.052 from Holland & Jenkins '99
+  real :: ZETA_N   !< This is the stability constant xi_N = 0.052 from Holland & Jenkins '99
                    !! divided by the von Karman constant VK. Was 1/8. [nondim]
   real :: RC       !< critical flux Richardson number.
   real :: I_ZETA_N !< The inverse of ZETA_N [nondim].
@@ -356,7 +356,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; ied = G%ied ; jed = G%jed
   ZETA_N = CS%Zeta_N
   VK = CS%Vk
-  RC = CS%Rc  
+  RC = CS%Rc
   I_ZETA_N = 1.0 / ZETA_N
   I_LF = 1.0 / CS%Lat_fusion
   SC = CS%kv_molec/CS%kd_molec_salt
@@ -569,7 +569,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                 wT_flux = dT_ustar * I_Gam_T
                 wB_flux_new = dB_dS * (dS_ustar * I_Gam_S) + dB_dT * wT_flux
 
-                ! Find the root where wB_flux_new = wB_flux.  
+                ! Find the root where wB_flux_new = wB_flux. 
                 if (abs(wB_flux_new - wB_flux) < CS%buoy_flux_itt_threshold*(abs(wB_flux_new) + abs(wB_flux))) exit
 
                 dDwB_dwB_in = dG_dwB * (dB_dS * (dS_ustar * I_Gam_S**2) + &
@@ -649,7 +649,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
               else
                 Sbdry(i,j) = Sbdry_it
               endif ! Sb_min_set
-              
+
               if (.not.CS%salt_flux_itt_bug) Sbdry(i,j) = Sbdry_it
 
             endif ! CS%find_salt_root
