@@ -569,7 +569,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                 wT_flux = dT_ustar * I_Gam_T
                 wB_flux_new = dB_dS * (dS_ustar * I_Gam_S) + dB_dT * wT_flux
 
-                ! Find the root where wB_flux_new = wB_flux. 
+                ! Find the root where wB_flux_new = wB_flux.
                 if (abs(wB_flux_new - wB_flux) < CS%buoy_flux_itt_threshold*(abs(wB_flux_new) + abs(wB_flux))) exit
 
                 dDwB_dwB_in = dG_dwB * (dB_dS * (dS_ustar * I_Gam_S**2) + &
