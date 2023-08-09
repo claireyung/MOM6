@@ -132,14 +132,14 @@ type, public :: bulkmixedlayer_CS ; private
   ! These are terms in the mixed layer TKE budget, all in [H L2 T-3 ~> m3 s-3 or W m-2] except as noted.
   real, allocatable, dimension(:,:) :: &
     ML_depth, &        !< The mixed layer depth [H ~> m or kg m-2].
-    diag_TKE_wind, &   !< The wind source of TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_RiBulk, & !< The resolved KE source of TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_conv, &   !< The convective source of TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_pen_SW, & !< The TKE sink required to mix penetrating shortwave heating [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_mech_decay, & !< The decay of mechanical TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_conv_decay, & !< The decay of convective TKE [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_mixing, & !< The work done by TKE to deepen the mixed layer [Z L2 T-3 ~> m3 s-3 or W m-2].
-    diag_TKE_conv_s2, & !< The convective source of TKE due to to mixing in sigma2 [Z L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_wind, &   !< The wind source of TKE [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_RiBulk, & !< The resolved KE source of TKE [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_conv, &   !< The convective source of TKE [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_pen_SW, & !< The TKE sink required to mix penetrating shortwave heating [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_mech_decay, & !< The decay of mechanical TKE [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_conv_decay, & !< The decay of convective TKE [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_mixing, & !< The work done by TKE to deepen the mixed layer [H L2 T-3 ~> m3 s-3 or W m-2].
+    diag_TKE_conv_s2, & !< The convective source of TKE due to to mixing in sigma2 [H L2 T-3 ~> m3 s-3 or W m-2].
     diag_PE_detrain, & !< The spurious source of potential energy due to mixed layer
                        !! detrainment [R Z L2 T-3 ~> W m-2].
     diag_PE_detrain2   !< The spurious source of potential energy due to mixed layer only
@@ -2528,6 +2528,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
   logical :: mergeable_bl         ! If true, it is an option to combine the two
                                   ! buffer layers and create water that matches
                                   ! the target density of an interior layer.
+  logical :: better_to_merge      ! True if it is energetically favorable to merge layers
   real :: stays_merge             ! If the two buffer layers can be combined
                                   ! stays_merge is the thickness of the upper
                                   ! layer that remains [H ~> m or kg m-2].
@@ -2547,6 +2548,9 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
   real :: dPE_extrapolate         ! The potential energy change due to dispersive advection or
                                   ! mixing layers [R Z L2 T-2 ~> J m-2].
   real :: dPE_det, dPE_merge      ! The energy required to mix the detrained water
+                                  ! into the buffer layer or the merge the two
+                                  ! buffer layers [R H2 L2 Z-1 T-2 ~> J m-2 or J kg2 m-8].
+  real :: dPE_det_nB, dPE_merge_nB  ! The energy required to mix the detrained water
                                   ! into the buffer layer or the merge the two
                                   ! buffer layers [R Z L2 T-2 ~> J m-2].
 
@@ -2598,7 +2602,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
   real :: I_denom                 ! A work variable with units of [S2 R-2 ~> ppt2 m6 kg-2] or [R2 S2 ~> ppt2 kg2 m-6].
 
   real :: g_2                     ! 1/2 g_Earth [L2 Z-1 T-2 ~> m s-2].
-  ! real :: Rho0xG                  ! Rho0 times G_Earth [R L2 Z-1 T-2 ~> kg m-2 s-2].
+  real :: Rho0xG                  ! Rho0 times G_Earth [R L2 Z-1 T-2 ~> kg m-2 s-2].
   real :: I2Rho0                  ! 1 / (2 Rho0) [R-1 ~> m3 kg-1].
   real :: Idt_diag                ! The inverse of the timestep used for diagnostics [T-1 ~> s-1].
   real :: Idt_H2                  ! The square of the conversion from thickness to Z
@@ -2631,7 +2635,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
   nkmb = CS%nkml+CS%nkbl
   h_neglect = GV%H_subroundoff
   g_2 = 0.5 * GV%g_Earth
-  ! Rho0xG = GV%Rho0 * GV%g_Earth
+  Rho0xG = GV%Rho0 * GV%g_Earth
   Idt_diag = 1.0 / dt_diag
   Idt_H2 = GV%H_to_Z**2 / dt_diag
   I2Rho0 = 0.5 / GV%Rho0
@@ -2752,7 +2756,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
       endif
     endif ! (h2 = 0 && h1 > 0)
 
-    dPE_extrap_rhoG = 0.0 ; dPE_extrapolate = 0.0 ; dPE_merge = 0.0
+    dPE_extrap_rhoG = 0.0 ; dPE_extrapolate = 0.0 ; dPE_merge = 0.0 ; dPE_merge_nB = 0.0
     mergeable_bl = .false.
     if ((h1 > 0.0) .and. (h2 > 0.0) .and. (h_to_bl > 0.0) .and. &
         (stable_Rcv)) then
@@ -2942,14 +2946,14 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
                     h1 - (h1+h2)*(SpV0(i,kb1) - SpV0_det) / (SpV0(i,kb2) - SpV0(i,kb1)))
           if ((stays_merge > stays_min_merge) .and. (stays_merge + h2_to_k1_rem >= h1 + h2)) then
             mergeable_bl = .true.
-            dPE_merge = g_2*GV%H_to_RZ**2*(SpV0(i,kb1)-SpV0(i,kb2)) * ((h1-stays_merge)*(h2-stays_merge))
+            dPE_merge_nB = g_2*GV%H_to_RZ**2*(SpV0(i,kb1)-SpV0(i,kb2)) * ((h1-stays_merge)*(h2-stays_merge))
           endif
         else
           stays_min_merge = MAX(h_min_bl, 2.0*h_min_bl - h_to_bl, &
                     h1 - (h1+h2)*(R0(i,kb1) - R0_det) / (R0(i,kb2) - R0(i,kb1)))
           if ((stays_merge > stays_min_merge) .and. (stays_merge + h2_to_k1_rem >= h1 + h2)) then
             mergeable_bl = .true.
-            dPE_merge = g_2*GV%H_to_Z**2*(R0(i,kb2)-R0(i,kb1)) * (h1-stays_merge)*(h2-stays_merge)
+            dPE_merge = g_2*(R0(i,kb2)-R0(i,kb1)) * (h1-stays_merge)*(h2-stays_merge)
           endif
         endif
       endif
@@ -3096,7 +3100,6 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
             dPE_extrapolate = 0.5*GV%g_Earth*GV%H_to_RZ**2*(SpV0(i,kb2)-SpV0_det) * (h2_to_k1*h2)
           else
             dPE_extrap_rhoG = I2Rho0*(R0_det-R0(i,kb2))*h2_to_k1*h2
-            dPE_extrapolate = (GV%g_Earth*GV%Rho0) * GV%H_to_Z**2*dPE_extrap_rhoG
           endif
 
           d_ea(i,kb2) = d_ea(i,kb2) - h2_to_k1
@@ -3163,20 +3166,23 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
               h_ml_to_h2*( (SpV0(i,kb2)-SpV0(i,0))*h2 + (SpV0(i,kb1)-SpV0(i,0))*h1 + &
                            (SpV0_det-SpV0(i,0))*h_det_to_h2 ) + &
               h_det_to_h1*h_ml_to_h1*(SpV0_det-SpV0(i,0))) - dPE_extrapolate )
-       else
+
+          if (allocated(CS%diag_PE_detrain2)) &
+            CS%diag_PE_detrain2(i,j) = CS%diag_PE_detrain2(i,j) + s1en + Idt_diag*dPE_extrapolate
+        else
           R0_det = R0_to_bl*Ihdet
           s1en = g_2 * Idt_H2 * ( ((R0(i,kb2)-R0(i,kb1))*h1*h2 + &
               h_det_to_h2*( (R0(i,kb1)-R0_det)*h1 + (R0(i,kb2)-R0_det)*h2 ) + &
               h_ml_to_h2*( (R0(i,kb2)-R0(i,0))*h2 + (R0(i,kb1)-R0(i,0))*h1 + &
                            (R0_det-R0(i,0))*h_det_to_h2 ) + &
               h_det_to_h1*h_ml_to_h1*(R0_det-R0(i,0))) - 2.0*GV%Rho0*dPE_extrap_rhoG )
+
+          if (allocated(CS%diag_PE_detrain2)) &
+            CS%diag_PE_detrain2(i,j) = CS%diag_PE_detrain2(i,j) + s1en + Idt_H2*Rho0xG*dPE_extrap_rhoG
         endif
 
         if (allocated(CS%diag_PE_detrain)) &
           CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + s1en
-
-        if (allocated(CS%diag_PE_detrain2)) &
-          CS%diag_PE_detrain2(i,j) = CS%diag_PE_detrain2(i,j) + s1en + Idt_diag*dPE_extrapolate
       endif
 
     elseif ((h_to_bl > 0.0) .or. (h1 < h_min_bl) .or. (h2 < h_min_bl)) then
@@ -3193,6 +3199,8 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
           !  dPE_extrap_rhoG = dPE_extrap_rhoG + 0.5*h_from_ml*(SpV0_to_bl - SpV0(i,0)*h_to_bl) / SpV0(i,0)
           dPE_extrap_rhoG = dPE_extrap_rhoG + 0.5*h_from_ml*(SpV0_to_bl - SpV0(i,0)*h_to_bl) * &
                             ( (h_to_bl + h_from_ml) / (SpV0_to_bl + h_from_ml*SpV0(i,0)) )
+          dPE_extrapolate = dPE_extrapolate + 0.5*GV%g_Earth*GV%H_to_RZ**2 * &
+                            h_from_ml*(SpV0_to_bl - SpV0(i,0)*h_to_bl)
           SpV0_to_bl = SpV0_to_bl + h_from_ml*SpV0(i,0)
         else
           dPE_extrap_rhoG = dPE_extrap_rhoG - I2Rho0*h_from_ml*(R0_to_bl - R0(i,0)*h_to_bl)
@@ -3276,15 +3284,15 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
       endif
 
       if (CS%nonBous_energetics) then
-        dPE_det = -g_2*GV%H_to_RZ**2*((SpV0(i,kb1)*h_to_bl - SpV0_to_bl)*stays + &
+        dPE_det_nB = -g_2*GV%H_to_RZ**2*((SpV0(i,kb1)*h_to_bl - SpV0_to_bl)*stays + &
                        (SpV0(i,kb2)-SpV0(i,kb1)) * (h1-stays) * &
                        (h2 - scale_slope*stays*((h1+h2)+h_to_bl)/(h1+h2)) ) - &
                   dPE_extrapolate
       else
-        dPE_det = g_2*GV%H_to_Z**2*((R0(i,kb1)*h_to_bl - R0_to_bl)*stays + &
+        dPE_det = g_2*((R0(i,kb1)*h_to_bl - R0_to_bl)*stays + &
                        (R0(i,kb2)-R0(i,kb1)) * (h1-stays) * &
                        (h2 - scale_slope*stays*((h1+h2)+h_to_bl)/(h1+h2)) ) - &
-                  dPE_extrapolate
+                  Rho0xG*dPE_extrap_rhoG
       endif
 
       if (dPE_time_ratio*h_to_bl > h_to_bl+h(i,0)) then
@@ -3293,7 +3301,13 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
         dPE_ratio = dPE_time_ratio
       endif
 
-      if ((mergeable_bl) .and. (num_events*dPE_ratio*dPE_det > dPE_merge)) then
+      if (CS%nonBous_energetics) then
+        better_to_merge = (num_events*dPE_ratio*dPE_det_nB > dPE_merge_nB)
+      else
+        better_to_merge = (num_events*dPE_ratio*dPE_det > dPE_merge)
+      endif
+
+      if (mergeable_bl .and. better_to_merge) then
         ! It is energetically preferable to merge the two buffer layers, detrain
         ! them into interior layer (k0), move the remaining upper buffer layer
         ! water into the lower buffer layer, and detrain undiluted into the
@@ -3323,7 +3337,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
         if (CS%nonBous_energetics) then
           ! Use the specific volume differences to limit the coordinate density change.
           dSpice_lim = -Rcv(i,kb1) * (dS_dT_gauge*dSpV0_dS(i)*(T_to_bl-T(i,kb1)*h_to_bl) - &
-                                     dT_dS_gauge*dSpV0_dT(i)*(S_to_bl-S(i,kb1)*h_to_bl)) / (SpV0(i,kb1) * h_to_bl)
+                                      dT_dS_gauge*dSpV0_dT(i)*(S_to_bl-S(i,kb1)*h_to_bl)) / (SpV0(i,kb1) * h_to_bl)
         else
           dSpice_lim = (dS_dT_gauge*dR0_dS(i)*(T_to_bl-T(i,kb1)*h_to_bl) - &
                         dT_dS_gauge*dR0_dT(i)*(S_to_bl-S(i,kb1)*h_to_bl)) / h_to_bl
@@ -3420,10 +3434,17 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
         h(i,kb1) = stays + h_to_bl
         h(i,kb2) = h1_to_h2
         h(i,k0) = h(i,k0) + (h1_to_k0 + h2)
-        if (allocated(CS%diag_PE_detrain)) &
-          CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + Idt_diag*dPE_merge
-        if (allocated(CS%diag_PE_detrain2)) CS%diag_PE_detrain2(i,j) = &
-             CS%diag_PE_detrain2(i,j) + Idt_diag*(dPE_det + dPE_extrapolate)
+        if (CS%nonBous_energetics) then
+          if (allocated(CS%diag_PE_detrain)) &
+            CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + Idt_diag*dPE_merge_nB
+          if (allocated(CS%diag_PE_detrain2)) CS%diag_PE_detrain2(i,j) = &
+               CS%diag_PE_detrain2(i,j) + Idt_diag*(dPE_det_nB + dPE_extrapolate)
+        else
+          if (allocated(CS%diag_PE_detrain)) &
+            CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + Idt_H2*dPE_merge
+          if (allocated(CS%diag_PE_detrain2)) CS%diag_PE_detrain2(i,j) = &
+               CS%diag_PE_detrain2(i,j) + Idt_H2*(dPE_det + Rho0xG*dPE_extrap_rhoG)
+        endif
       else ! Not mergeable_bl.
         ! There is no further detrainment from the buffer layers, and the
         ! upper buffer layer water is distributed optimally between the
@@ -3472,7 +3493,7 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
                           scale_slope*h1_to_h2 * Ih
           if (h_to_bl > 0.0) then
             dSpice_lim = (dS_dT_gauge*dR0_dS(i)*(T_to_bl-T(i,kb1)*h_to_bl) - &
-                          dT_dS_gauge*dR0_dT(i)*(S_to_bl-S(i,kb1)*h_to_bl)) /  h_to_bl
+                          dT_dS_gauge*dR0_dT(i)*(S_to_bl-S(i,kb1)*h_to_bl)) / h_to_bl
           else
             dSpice_lim = dS_dT_gauge*dR0_dS(i)*(T(i,0)-T(i,kb1)) - &
                          dT_dS_gauge*dR0_dT(i)*(S(i,0)-S(i,kb1))
@@ -3523,10 +3544,19 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Spv0, Rcv, RcvTgt, dt, dt_diag, d_e
         h(i,kb1) = stays + h_to_bl
         h(i,kb2) = h(i,kb2) + h1_to_h2
 
-        if (allocated(CS%diag_PE_detrain)) &
-          CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + Idt_diag*dPE_det
-        if (allocated(CS%diag_PE_detrain2)) CS%diag_PE_detrain2(i,j) = &
-          CS%diag_PE_detrain2(i,j) + Idt_diag*(dPE_det + dPE_extrapolate)
+        if (CS%nonBous_energetics) then
+          if (allocated(CS%diag_PE_detrain)) &
+            CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + Idt_diag*dPE_det_nB
+          if (allocated(CS%diag_PE_detrain2)) CS%diag_PE_detrain2(i,j) = &
+            CS%diag_PE_detrain2(i,j) + Idt_diag*(dPE_det_nB + dPE_extrapolate)
+        else
+          ! Recasting dPE_det into the same units as dPE_det_nB changes these diagnostics slightly
+          ! in some cases for reasons that are not understood.
+          if (allocated(CS%diag_PE_detrain)) &
+            CS%diag_PE_detrain(i,j) = CS%diag_PE_detrain(i,j) + Idt_H2*dPE_det
+          if (allocated(CS%diag_PE_detrain2)) CS%diag_PE_detrain2(i,j) = &
+            CS%diag_PE_detrain2(i,j) + Idt_H2*(dPE_det + Rho0xG*dPE_extrap_rhoG)
+        endif
       endif
     endif ! End of detrainment...
 
