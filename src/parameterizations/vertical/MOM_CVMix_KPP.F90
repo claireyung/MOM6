@@ -625,7 +625,7 @@ subroutine KPP_calculate(CS, G, GV, US, h, tv, uStar, buoyFlux, Kt, Ks, Kv, &
 
   ! Local variables
   integer :: i, j, k                            ! Loop indices
-  real, dimension(SZI_(G),SZK_(GV)) ::  dz      ! Height change across layers [Z ~> m]
+  real, dimension(SZI_(G),SZK_(GV)) :: dz       ! Height change across layers [Z ~> m]
   real, dimension( GV%ke )     :: cellHeight    ! Cell center heights referenced to surface [Z ~> m] (negative in ocean)
   real, dimension( GV%ke+1 )   :: iFaceHeight   ! Interface heights referenced to surface [Z ~> m] (negative in ocean)
   real, dimension( GV%ke )     :: z_cell        ! Cell center heights referenced to surface [m] (negative in ocean)
@@ -649,7 +649,7 @@ subroutine KPP_calculate(CS, G, GV, US, h, tv, uStar, buoyFlux, Kt, Ks, Kv, &
       "KPP_calculate: The Waves control structure must be associated if STOKES_MIXING is True.")
 
   if (CS%debug) then
-    call hchksum(dz, "KPP in: dz",G%HI,haloshift=0, scale=US%Z_to_m)
+    call hchksum(h, "KPP in: h",G%HI,haloshift=0, scale=GV%H_to_m)
     call hchksum(uStar, "KPP in: uStar",G%HI,haloshift=0, scale=US%Z_to_m*US%s_to_T)
     call hchksum(buoyFlux, "KPP in: buoyFlux",G%HI,haloshift=0, scale=US%L_to_m**2*US%s_to_T**3)
     call hchksum(Kt, "KPP in: Kt",G%HI,haloshift=0, scale=GV%HZ_T_to_m2_s)
@@ -1403,7 +1403,7 @@ subroutine KPP_get_BLD(CS, BLD, G, US, m_to_BLD_units)
                                                        !! this module
   type(ocean_grid_type),            intent(in)  :: G   !< Grid structure
   type(unit_scale_type),            intent(in)  :: US  !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: BLD !< Boundary layer depth [Z ~> m ] or other units
+  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: BLD !< Boundary layer depth [Z ~> m] or other units
   real,                   optional, intent(in)  :: m_to_BLD_units !< A conversion factor from meters
                                                        !! to the desired units for BLD [various]
   ! Local variables
