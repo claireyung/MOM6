@@ -3439,10 +3439,10 @@ subroutine allocate_mech_forcing_from_ref(forces_ref, G, forces)
 
   ! Identify the active fields in the reference forcing
   call get_mech_forcing_groups(forces_ref, do_stress, do_ustar, do_tau_mag, do_shelf, &
-                              do_press, do_iceberg)
+                               do_press, do_iceberg)
 
   call allocate_mech_forcing(G, forces, do_stress, do_ustar, do_shelf, &
-                             do_press, do_iceberg, do_tau_mag)
+                             do_press, do_iceberg, tau_mag=do_tau_mag)
 end subroutine allocate_mech_forcing_from_ref
 
 
