@@ -165,7 +165,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
   real, dimension(SZK_(GV)+1) :: kv_col !< Viscosities at interfaces in the column [m2 s-1]
   real, dimension(SZK_(GV)+1) :: kd_col !< Diffusivities at interfaces in the column [m2 s-1]
   real, dimension(SZK_(GV)+1) :: iFaceHeight !< Height of interfaces [Z ~> m]
-  real, dimension(SZK_(GV))   :: cellHeight  !< Height of cell centers [H ~> m or kg m-2]
+  real, dimension(SZK_(GV))   :: cellHeight  !< Height of cell centers [Z ~> m]
   real, dimension(SZI_(G),SZK_(GV)) :: dz ! Height change across layers [Z ~> m]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) :: &
     kd_conv, &                         !< Diffusivity added by convection for diagnostics [Z2 T-1 ~> m2 s-1]
