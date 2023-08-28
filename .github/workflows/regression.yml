@@ -1,7 +1,8 @@
 name: Regression
 
 on: [pull_request]
-
+  branches: 
+    - master
 jobs:
   build-test-regression:
 
