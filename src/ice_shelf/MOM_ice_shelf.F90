@@ -214,7 +214,8 @@ type, public :: ice_shelf_CS ; private
              id_surf_elev = -1, id_bathym = -1, &
              id_area_shelf_h = -1, &
              id_ustar_shelf = -1, id_shelf_mass = -1, id_mass_flux = -1, &
-             id_shelf_sfc_mass_flux = -1, id_lplus_arr = -1
+             id_shelf_sfc_mass_flux = -1, id_lplus_arr = -1, &
+             id_constantcoeff_mr = -1, id_r22_online_mr = -1
   !>@}
 
   type(external_field) :: mass_handle
@@ -275,7 +276,9 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
     exch_vel_s     !< Sub-shelf salt exchange velocity [Z T-1 ~> m s-1]
 
   real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
-    lplus_arr      !< Viscous Obukhov Scale [nondim]
+    lplus_arr, &      !< Viscous Obukhov Scale [nondim]
+    constantcoeff_mr, & !< Online calculated melt rate [m/yr]
+    r22_online_mr    !< Online calculated melt rate [m/yr]
 
   real, dimension(SZDI_(CS%grid),SZDJ_(CS%grid)) :: &
     mass_flux  !< Total mass flux of freshwater across the ice-ocean interface. [R Z L2 T-1 ~> kg s-1]
@@ -395,6 +398,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   exch_vel_t(:,:) = 0.0 ; exch_vel_s(:,:) = 0.0
   ISS%tflux_shelf(:,:) = 0.0 ; ISS%water_flux(:,:) = 0.0
   lplus_arr(:,:) = 0.0
+  constantcoeff_mr(:,:) = 0.0
+  r22_online_mr(:,:) = 0.0
   ISS%salt_flux(:,:) = 0.0 ; ISS%tflux_ocn(:,:) = 0.0 ; ISS%tfreeze(:,:) = 0.0
   ! define Sbdry to avoid Run-Time Check Failure, when melt is not computed.
   haline_driving(:,:) = 0.0
@@ -530,6 +535,216 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             Sb_min_set = .false.
           endif !find_salt_root
 
+          ! Diagnostic Loop
+          do it1 = 1,20
+            !PRINT *, 'Big it', it1
+            ! Determine the potential temperature at the ice-ocean interface.
+            ! The following two lines are equivalent:
+            ! call calculate_TFreeze(Sbdry(i,j), p_int(i), ISS%tfreeze(i,j), CS%eqn_of_state, scale_from_EOS=.true.)
+            call calculate_TFreeze(Sbdry(i:i,j), p_int(i:i), ISS%tfreeze(i:i,j), CS%eqn_of_state)
+
+            dT_ustar = (ISS%tfreeze(i,j) - sfc_state%sst(i,j)) * ustar_h
+            dS_ustar = (Sbdry(i,j) - sfc_state%sss(i,j)) * ustar_h
+
+            ! First, determine the buoyancy flux assuming no effects of stability
+            ! on the turbulence.  Following H & J '99, this limit also applies
+            ! when the buoyancy flux is destabilizing.
+
+            if (CS%const_gamma) then ! if using a constant gamma_T
+              ! note the different form, here I_Gam_T is NOT 1/Gam_T!
+              I_Gam_T = CS%Gamma_T_3EQ
+              I_Gam_S = CS%Gamma_S_3EQ
+            elseif (CS%r22_gamma_param) then ! if using R22 param
+              I_Gam_T = CS%r22_Gamma_T_lim
+              I_Gam_S = CS%r22_Gamma_S_lim
+            else
+              Gam_turb = I_VK * (ln_neut + (0.5 * I_ZETA_N - 1.0))
+              I_Gam_T = 1.0 / (Gam_mol_t + Gam_turb)
+              I_Gam_S = 1.0 / (Gam_mol_s + Gam_turb)
+            endif
+
+            wT_flux = dT_ustar * I_Gam_T
+            wB_flux = dB_dS * (dS_ustar * I_Gam_S) + dB_dT * wT_flux
+
+            if ((.not.CS%r22_gamma_param) .and. (wB_flux < 0)) then
+              ! If using R22 parama and stabilizing buoyancy flux,
+              ! iterate to make transfer coefficient a function
+              ! of viscous Obukhov scale (Lplus, a function of buoyancy)
+              Lplus = -1.0 * (ustar_h**4) * I_VK / (CS%kv_molec * wB_flux)
+              ! Calculate Lplus
+              !! OLD: If Lplus bigger than critical value, and dT < 0 (melting)
+              !! use polynomial form
+              !!if ((Lplus < CS%r22_Lplus_crit) .and. (dT_ustar > 0)) then
+              do itr22 = 1,30
+                ! Calculate transfer coeffs
+                I_Gam_T_new = exp(CS%r22_C) * Lplus**(CS%r22_D)
+                I_Gam_S_new = exp(CS%r22_A) * Lplus**(CS%r22_B)
+                ! If transfer coeffs exceed a cut-off, set to cut-off
+                if (I_Gam_T_new > CS%r22_Gamma_T_lim) then
+                  I_Gam_T_new = CS%r22_Gamma_T_lim
+                endif
+                if (I_Gam_S_new > CS%r22_Gamma_S_lim) then
+                  I_Gam_S_new = CS%r22_Gamma_S_lim
+                endif
+                ! Now recalculate buoyancy flux
+                wT_flux = dT_ustar * I_Gam_T_new
+                wB_flux = dB_dS * (dS_ustar * I_Gam_S_new) + dB_dT * wT_flux
+                ! Recalculate Lplus
+                Lplus_new = -1.0 * (ustar_h**4) * I_VK / (CS%kv_molec * wB_flux)
+                !PRINT *, 'Lplus_new: ', Lplus
+                ! If Lplus and Lplus_new have converged, exit
+                if (abs(Lplus - Lplus_new) < (CS%r22_Lplus_buoy_itt_threshold)) then
+                  Lplus = Lplus_new
+                  I_Gam_T = I_Gam_T_new
+                  I_Gam_S = I_Gam_S_new
+                  exit
+                endif
+                ! otherwise, repeat loop with new Lplus
+                Lplus = Lplus_new
+              ! Loop until condition satisfied or 30 times
+              enddo
+              ! If wB_flux > 0 use transfer coeffs that have already been assigned
+              !endif
+              ! Update diag
+              lplus_arr(i,j) = Lplus
+            ! If not R22, and negative buoyancy flux
+            else
+              if (CS%const_gamma) then ! if using a constant gamma_T
+                ! note the different form, here I_Gam_T is NOT 1/Gam_T!
+                I_Gam_T = CS%Gamma_T_3EQ
+                I_Gam_S = CS%Gamma_S_3EQ
+              else
+                I_Gam_T = 1.0 / (Gam_mol_t + Gam_turb)
+                I_Gam_S = 1.0 / (Gam_mol_s + Gam_turb)
+              endif
+
+              wT_flux = dT_ustar * I_Gam_T
+              wB_flux_new = dB_dS * (dS_ustar * I_Gam_S) + dB_dT * wT_flux
+
+            endif
+
+            ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
+            exch_vel_t(i,j) = ustar_h * I_Gam_T
+            exch_vel_s(i,j) = ustar_h * I_Gam_S
+
+            ! Calculate the heat flux inside the ice shelf.
+            ! Vertical adv/diff as in H+J 1999, equations (26) & approx from (31).
+            !   Q_ice = density_ice * CS%Cp_ice * K_ice * dT/dz (at interface)
+            ! vertical adv/diff as in H+J 1999, equations (31) & (26)...
+            !   dT/dz ~= min( (lprec/(density_ice*K_ice))*(CS%Temp_Ice-T_freeze) , 0.0 )
+            ! If this approximation is not made, iterations are required... See H+J Fig 3.
+
+            if (ISS%tflux_ocn(i,j) >= 0.0) then
+              ! Freezing occurs due to downward ocean heat flux, so zero iout ce heat flux.
+              ISS%water_flux(i,j) = -I_LF * ISS%tflux_ocn(i,j)
+              ISS%tflux_shelf(i,j) = 0.0
+            else
+              if (CS%insulator) then
+                !no conduction/perfect insulator
+                ISS%tflux_shelf(i,j) = 0.0
+                ISS%water_flux(i,j) = I_LF * (ISS%tflux_shelf(i,j) - ISS%tflux_ocn(i,j))
+
+              else
+                ! With melting, from H&J 1999, eqs (31) & (26)...
+                !   Q_ice ~= Cp_ice * (CS%Temp_Ice-T_freeze) * lprec
+                !   RhoLF*lprec = Q_ice - ISS%tflux_ocn(i,j)
+                !   lprec = -(ISS%tflux_ocn(i,j)) / (CS%Lat_fusion + Cp_ice * (T_freeze-CS%Temp_Ice))
+                ISS%water_flux(i,j) = -ISS%tflux_ocn(i,j) / &
+                     (CS%Lat_fusion + CS%Cp_ice * (ISS%tfreeze(i,j) - CS%Temp_Ice))
+
+                ISS%tflux_shelf(i,j) = ISS%tflux_ocn(i,j) + CS%Lat_fusion*ISS%water_flux(i,j)
+              endif
+
+            endif
+            !other options: dTi/dz linear through shelf, with draft in [Z ~> m], KTI in [Z2 T-1 ~> m2 s-1]
+            !    dTi_dz = (CS%Temp_Ice - ISS%tfreeze(i,j)) / draft(i,j)
+            !    ISS%tflux_shelf(i,j) = Rho_Ice * CS%Cp_ice * KTI * dTi_dz
+
+
+            if (CS%find_salt_root) then
+              exit ! no need to do interaction, so exit loop
+            else
+
+              mass_exch = exch_vel_s(i,j) * CS%Rho_ocn
+              Sbdry_it = (sfc_state%sss(i,j) * mass_exch + CS%Salin_ice * ISS%water_flux(i,j)) / &
+                         (mass_exch + ISS%water_flux(i,j))
+              dS_it = Sbdry_it - Sbdry(i,j)
+              if (abs(dS_it) < 1.0e-4*(0.5*(sfc_state%sss(i,j) + Sbdry(i,j) + 1.0e-10*US%ppt_to_S))) exit
+
+              if (dS_it < 0.0) then ! Sbdry is now the upper bound.
+                if (Sb_max_set) then
+                  if (Sbdry(i,j) > Sb_max) &
+                    call MOM_error(FATAL,"shelf_calc_flux: Irregular iteration for Sbdry (max).")
+                endif
+                Sb_max = Sbdry(i,j) ; dS_max = dS_it ; Sb_max_set = .true.
+              else ! Sbdry is now the lower bound.
+                if (Sb_min_set) then
+                  if (Sbdry(i,j) < Sb_min) &
+                    call MOM_error(FATAL, "shelf_calc_flux: Irregular iteration for Sbdry (min).")
+                endif
+                Sb_min = Sbdry(i,j) ; dS_min = dS_it ; Sb_min_set = .true.
+              endif ! dS_it < 0.0
+
+              if (Sb_min_set .and. Sb_max_set) then
+                ! Use the false position method for the next iteration.
+                Sbdry(i,j) = Sb_min + (Sb_max-Sb_min) * (dS_min / (dS_min - dS_max))
+              else
+                Sbdry(i,j) = Sbdry_it
+              endif ! Sb_min_set
+
+              if (.not.CS%salt_flux_itt_bug) Sbdry(i,j) = Sbdry_it
+
+            endif ! CS%find_salt_root
+
+          enddo !it1
+              ! ISS%water_flux = net liquid water into the ocean [R Z T-1 ~> kg m-2 s-1]
+          if (CS%r22_gamma_param) then
+            constantcoeff_mr(i,j) = ISS%water_flux(i,j) * CS%flux_factor
+          else
+            r22_online_mr(i,j) = ISS%water_flux(i,j) * CS%flux_factor
+          endif
+
+          ! REAL SALT CALC
+          if (CS%find_salt_root) then
+            ! Solve for the skin salinity using the linearized liquidus parameters and
+            ! balancing the turbulent fresh water flux in the near-boundary layer with
+            ! the net fresh water or salt added by melting:
+            ! (Cp/Lat_fusion)*Gamma_T_3Eq*(TFr_skin-T_ocn) = Gamma_S_3Eq*(S_skin-S_ocn)/S_skin
+
+            ! S_a is always < 0.0 with a realistic expression for the freezing point.
+            S_a = CS%dTFr_dS * CS%Gamma_T_3EQ * CS%Cp
+            S_b = CS%Gamma_T_3EQ*CS%Cp*(CS%TFr_0_0 + CS%dTFr_dp*p_int(i) - sfc_state%sst(i,j)) - &
+                  CS%Lat_fusion * CS%Gamma_S_3EQ    ! S_b Can take either sign, but is usually negative.
+            S_c = CS%Lat_fusion * CS%Gamma_S_3EQ * sfc_state%sss(i,j) ! Always >= 0
+
+            if (S_c == 0.0) then  ! The solution for fresh water.
+              Sbdry(i,j) = 0.0
+            elseif (S_a < 0.0) then ! This is the usual ocean case
+              if (S_b < 0.0) then ! This is almost always the case
+                Sbdry(i,j) = 2.0*S_c / (-S_b + SQRT(S_b*S_b - 4.*S_a*S_c))
+              else
+                Sbdry(i,j) = (S_b + SQRT(S_b*S_b - 4.*S_a*S_c)) / (-2.*S_a)
+              endif
+            elseif ((S_a == 0.0) .and. (S_b < 0.0)) then ! It should be the case that S_b < 0.
+              Sbdry(i,j) = -S_c / S_b
+            else
+              call MOM_error(FATAL, "Impossible conditions found in 3-equation skin salinity calculation.")
+            endif
+
+            ! Safety check
+            if (Sbdry(i,j) < 0.) then
+              write(mesg,*) 'sfc_state%sss(i,j) = ',US%S_to_ppt*sfc_state%sss(i,j), &
+                            'S_a, S_b, S_c', US%ppt_to_S*S_a, S_b, US%S_to_ppt*S_c
+              call MOM_error(WARNING, mesg, .true.)
+              call MOM_error(FATAL, "shelf_calc_flux: Negative salinity (Sbdry).")
+            endif
+          else
+            ! Guess sss as the iteration starting point for the boundary salinity.
+            Sbdry(i,j) = sfc_state%sss(i,j) ; Sb_max_set = .false.
+            Sb_min_set = .false.
+          endif !find_salt_root
+
+          ! Real Calculation Loop
           do it1 = 1,20
             !PRINT *, 'Big it', it1
             ! Determine the potential temperature at the ice-ocean interface.
@@ -871,6 +1086,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   if (CS%id_h_shelf > 0) call post_data(CS%id_h_shelf, ISS%h_shelf, CS%diag)
   if (CS%id_h_mask > 0) call post_data(CS%id_h_mask,ISS%hmask,CS%diag)
   if (CS%id_lplus_arr > 0) call post_data(CS%id_lplus_arr, lplus_arr, CS%diag)
+  if (CS%id_r22_online_mr > 0) call post_data(CS%id_r22_online_mr, r22_online_mr, CS%diag)
+  if (CS%id_constantcoeff_mr > 0) call post_data(CS%id_constantcoeff_mr, constantcoeff_mr, CS%diag)
   call disable_averaging(CS%diag)
 
 
@@ -1546,34 +1763,34 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "SHELF_3EQ_R22_PARAM", CS%r22_gamma_param, &
                  "If true, use the R22 transfer coefficient parameterisation.", &
                  default=.false.)
-  if (CS%r22_gamma_param) then ! read R22 constants
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_A", CS%r22_A, &
+  !if (CS%r22_gamma_param) then ! read R22 constants
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_A", CS%r22_A, &
                  "Multiplicative constant in R22 GAMMA_S transfer coefficient.", &
                  units = "nondim", default=-9.489)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_B", CS%r22_B, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_B", CS%r22_B, &
                  "Power-law scaling constant of Lplus in R22 GAMMA_S transfer coefficient.", &
                  units = "nondim", default=0.155)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_C", CS%r22_C, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_C", CS%r22_C, &
                  "Multiplicative constant in R22 GAMMA_T transfer coefficient.", &
                  units = "nondim", default=-7.182)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_D", CS%r22_D, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_D", CS%r22_D, &
                  "Power-law scaling constant of Lplus in R22 GAMMA_T transfer coefficient.", &
                  units = "nondim", default=0.290)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_LIM", CS%r22_Gamma_T_lim, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_LIM", CS%r22_Gamma_T_lim, &
                  "Constant limiting transfer coefficient for heat in R22 parameterisation", &
                  units = "nondim", default=0.011)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_LIM", CS%r22_Gamma_S_lim, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_LIM", CS%r22_Gamma_S_lim, &
                  "Constant limiting transfer coefficient for salt in R22 parameterisation", &
                  units = "nondim", default=3.1e-4)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_CRIT", CS%r22_Lplus_crit, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_CRIT", CS%r22_Lplus_crit, &
                  "Critical viscous Obukhov length, Lplus < Lpluscrit has varying "//&
                  "transfer coefficient according to R22, for Lplus > Lpluscrit "//&
                  "reach constants SHELF_3EQ_R22_GAMMA_T_LIM and SHELF_3EQ_R22_GAMMA_S_LIM.", &
                  units = "nondim", default=1e4)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_BUOY_ITT_THRESHOLD", &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_BUOY_ITT_THRESHOLD", &
                  CS%r22_Lplus_buoy_itt_threshold, "Threshold for Lplus buoyancy "//&
                  "iteration convergence.", units = "nondim", default=1e-4)
-  endif
+  !endif
 
   call get_param(param_file, mdl, "G_EARTH", CS%g_Earth, &
                  "The gravitational acceleration of the Earth.", &
@@ -1943,7 +2160,11 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   if (CS%r22_gamma_param) then
     CS%id_lplus_arr = register_diag_field('ice_shelf_model', 'Lplus', CS%diag%axesT1, CS%Time, &
        'Viscous Obukhov scale', 'none')
-
+    CS%id_constantcoeff_mr = register_diag_field('ice_shelf_model', 'MR_cc', CS%diag%axesT1, CS%Time, &
+       'constant coeff melt rate calculated online', 'none')
+  else 
+    CS%id_r22_online_mr = register_diag_field('ice_shelf_model', 'MR_r22', CS%diag%axesT1, CS%Time, &
+       'R22 melt rate calculated online', 'none')
   endif
   call MOM_IS_diag_mediator_close_registration(CS%diag)
 
