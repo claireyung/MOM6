@@ -1,8 +1,12 @@
 name: Performance Monitor
 
-on: [pull_request]
-  branches: 
-    - master
+on: 
+  push:
+    branches: 
+      - master
+  pull_request:
+    branches: 
+      - master
 jobs:
   build-test-perfmon:
 

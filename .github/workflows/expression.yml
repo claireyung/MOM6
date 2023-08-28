@@ -1,8 +1,12 @@
 name: Expression verification
 
-on: [push, pull_request]
-  branches: 
-    - master
+on: 
+  push:
+    branches: 
+      - master
+  pull_request:
+    branches: 
+      - master
 jobs:
   test-repro-and-dims:
 
