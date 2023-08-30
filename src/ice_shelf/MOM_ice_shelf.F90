@@ -698,12 +698,13 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
 
           enddo !it1
               ! ISS%water_flux = net liquid water into the ocean [R Z T-1 ~> kg m-2 s-1]
-          if (CS%r22_gamma_param) then
-            constantcoeff_mr(i,j) = ISS%water_flux(i,j) * CS%flux_factor
-          else
-            r22_online_mr(i,j) = ISS%water_flux(i,j) * CS%flux_factor
-          endif
-
+          !if (CS%r22_gamma_param) then
+          constantcoeff_mr(i,j) = ISS%water_flux(i,j) * CS%flux_factor
+          !else
+          r22_online_mr(i,j) = ISS%water_flux(i,j) * CS%flux_factor
+          !endif
+          ! PRINT*, constantcoeff_mr
+          ! PRINT*, r22_online_mr
           ! REAL SALT CALC
           if (CS%find_salt_root) then
             ! Solve for the skin salinity using the linearized liquidus parameters and
