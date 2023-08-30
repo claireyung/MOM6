@@ -2198,10 +2198,10 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
     CS%id_lplus_arr = register_diag_field('ice_shelf_model', 'Lplus', CS%diag%axesT1, CS%Time, &
        'Viscous Obukhov scale', 'none')
     CS%id_constantcoeff_mr = register_diag_field('ice_shelf_model', 'MR_cc', CS%diag%axesT1, CS%Time, &
-       'constant coeff melt rate calculated online', 'none')
+       'constant coeff melt rate calculated online', 'm yr-1', conversion=meltrate_conversion) 
   else 
     CS%id_r22_online_mr = register_diag_field('ice_shelf_model', 'MR_r22', CS%diag%axesT1, CS%Time, &
-       'R22 melt rate calculated online', 'none')
+       'R22 melt rate calculated online', 'm yr-1', conversion=meltrate_conversion) 
   endif
   call MOM_IS_diag_mediator_close_registration(CS%diag)
 
