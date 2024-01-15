@@ -204,6 +204,8 @@ type, public :: ice_shelf_CS ; private
                                          !! used in the 3Eq. R22 formulation
   real :: r22_Gamma_S_lim                !< Limiting nondimensional salt-transfer coefficient,
                                          !! used in the 3Eq. R22 formulation
+  logical :: r22_gamma_convlimit_param   !< If true, limit to MK18 convective param at low ustar
+  real :: r22_mk18_conv_angle            !< Angle for MK18 convective param
 
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
@@ -346,6 +348,11 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   real :: Lplus_new         ! viscous Obukhoc scale used for iteration
   real :: I_Gam_T_new       ! iteration transfer coeff for T
   real :: I_Gam_S_new       ! iteration transfer coeff for S
+  ! Variables used in convective limit of param
+  real :: c_1               ! Constant in Kerr and McConnochie 2015, default c_1 = 0.097
+  real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
+    exch_vel_t_conv         !< Sub-shelf thermal exchange velocity [Z T-1 ~> m s-1]
+  
 
   real, parameter :: c2_3 = 2.0/3.0
   character(len=160) :: mesg  ! The text of an error message
@@ -386,6 +393,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   PR = CS%kv_molec/CS%kd_molec_temp
   I_VK = 1.0/VK
   RhoCp = CS%Rho_ocn * CS%Cp
+  c_1 = 0.097
 
   !first calculate molecular component
   Gam_mol_t = 12.5 * (PR**c2_3) - 6.0
@@ -535,7 +543,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             Sb_min_set = .false.
           endif !find_salt_root
 
-          ! Diagnostic Loop
+          ! Diagnostic Loop (warning: NO convective param in this yet)
           do it1 = 1,20
             !PRINT *, 'Big it', it1
             ! Determine the potential temperature at the ice-ocean interface.
@@ -867,7 +875,16 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
             exch_vel_t(i,j) = ustar_h * I_Gam_T
             exch_vel_s(i,j) = ustar_h * I_Gam_S
-
+            if (CS%r22_gamma_convlimit_param) then
+              ! If limiting to MK18 convective param, determine equivalent exchange velocity
+              exch_vel_t_conv(i,j) = c_1*(CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*(-1)*dR0_dS(i)*CS%kd_molec_salt**(1/2)/CS%kv_molec)**(1/3)* & 
+                                     (CS%kd_molec_temp)**(1/2)* Rhoml(i)/900 * cos(CS%r22_mk18_conv_angle*3.1415/180)**(2/3)
+              if (exch_vel_t_conv(i,j) > exch_vel_t(i,j)) then
+                 ! use exchange velocity from convective param instead of shear-driven ustar one
+                 exch_vel_t(i,j) = max( exch_vel_t(i,j), exch_vel_t_conv(i,j))
+                 exch_vel_s(i,j) = exch_vel_t(i,j)/35
+              endif
+            endif
             ! Calculate the heat flux inside the ice shelf.
             ! Vertical adv/diff as in H+J 1999, equations (26) & approx from (31).
             !   Q_ice = density_ice * CS%Cp_ice * K_ice * dT/dz (at interface)
@@ -1764,34 +1781,45 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
   call get_param(param_file, mdl, "SHELF_3EQ_R22_PARAM", CS%r22_gamma_param, &
                  "If true, use the R22 transfer coefficient parameterisation.", &
                  default=.false.)
-  !if (CS%r22_gamma_param) then ! read R22 constants
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_A", CS%r22_A, &
+  if (CS%r22_gamma_param) then ! read R22 constants
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_A", CS%r22_A, &
                  "Multiplicative constant in R22 GAMMA_S transfer coefficient.", &
                  units = "nondim", default=-9.489)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_B", CS%r22_B, &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_B", CS%r22_B, &
                  "Power-law scaling constant of Lplus in R22 GAMMA_S transfer coefficient.", &
                  units = "nondim", default=0.155)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_C", CS%r22_C, &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_C", CS%r22_C, &
                  "Multiplicative constant in R22 GAMMA_T transfer coefficient.", &
                  units = "nondim", default=-7.182)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_D", CS%r22_D, &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_D", CS%r22_D, &
                  "Power-law scaling constant of Lplus in R22 GAMMA_T transfer coefficient.", &
                  units = "nondim", default=0.290)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_LIM", CS%r22_Gamma_T_lim, &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_T_LIM", CS%r22_Gamma_T_lim, &
                  "Constant limiting transfer coefficient for heat in R22 parameterisation", &
                  units = "nondim", default=0.011)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_LIM", CS%r22_Gamma_S_lim, &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_GAMMA_S_LIM", CS%r22_Gamma_S_lim, &
                  "Constant limiting transfer coefficient for salt in R22 parameterisation", &
                  units = "nondim", default=3.1e-4)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_CRIT", CS%r22_Lplus_crit, &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_CRIT", CS%r22_Lplus_crit, &
                  "Critical viscous Obukhov length, Lplus < Lpluscrit has varying "//&
                  "transfer coefficient according to R22, for Lplus > Lpluscrit "//&
                  "reach constants SHELF_3EQ_R22_GAMMA_T_LIM and SHELF_3EQ_R22_GAMMA_S_LIM.", &
                  units = "nondim", default=1e4)
-  call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_BUOY_ITT_THRESHOLD", &
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_BUOY_ITT_THRESHOLD", &
                  CS%r22_Lplus_buoy_itt_threshold, "Threshold for Lplus buoyancy "//&
                  "iteration convergence.", units = "nondim", default=1e-4)
-  !endif
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_PARAM", CS%r22_gamma_convlimit_param, &
+                 "If true, use the McConnochie and Kerr (2018) convective parameterisation "//&
+                 "at the low melt limit with a continuous connection between regimes. Requires "//&
+                 "SHELF_3EQ_R22_PARAM = True.", default=.false.)
+    !if (CS%r22_gamma_convlimit_param) then
+    call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_ANGLE", CS%r22_mk18_conv_angle, &
+                 "Angle from the vertical (0 vertical, 90 horizontal) for McConnochie "//&
+                 "and Kerr (2018) convective parameterisation. Kerr and McConnochie (2015) "//&
+                 "can be retrieved with angle 0.", &
+                 units = "nondim", default=7.5e1)
+    !endif
+  endif
 
   call get_param(param_file, mdl, "G_EARTH", CS%g_Earth, &
                  "The gravitational acceleration of the Earth.", &
