@@ -1828,18 +1828,19 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
     call get_param(param_file, mdl, "SHELF_3EQ_R22_LPLUS_BUOY_ITT_THRESHOLD", &
                  CS%r22_Lplus_buoy_itt_threshold, "Threshold for Lplus buoyancy "//&
                  "iteration convergence.", units = "nondim", default=1e-4)
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_PARAM", CS%r22_gamma_convlimit_param, &
+  endif
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_PARAM", CS%r22_gamma_convlimit_param, &
                  "If true, use the McConnochie and Kerr (2018) convective parameterisation "//&
                  "at the low melt limit with a continuous connection between regimes. Requires "//&
                  "SHELF_3EQ_R22_PARAM = True.", default=.false.)
     !if (CS%r22_gamma_convlimit_param) then
-    call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_ANGLE", CS%r22_mk18_conv_angle, &
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_ANGLE", CS%r22_mk18_conv_angle, &
                  "Angle from the vertical (0 vertical, 90 horizontal) for McConnochie "//&
                  "and Kerr (2018) convective parameterisation. Kerr and McConnochie (2015) "//&
                  "can be retrieved with angle 0.", &
                  units = "nondim", default=7.5e1)
     !endif
-  endif
+  !endif
 
   call get_param(param_file, mdl, "G_EARTH", CS%g_Earth, &
                  "The gravitational acceleration of the Earth.", &
