@@ -350,8 +350,9 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   real :: I_Gam_S_new       ! iteration transfer coeff for S
   ! Variables used in convective limit of param
   real :: c_1               ! Constant in Kerr and McConnochie 2015, default c_1 = 0.097
+  real :: angle_rad         ! Convert degrees into radians
   real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
-    exch_vel_t_conv         !< Sub-shelf thermal exchange velocity [Z T-1 ~> m s-1]
+    exch_vel_t_conv         !< Sub-shelf effective convective thermal exchange velocity [Z T-1 ~> m s-1]
   
 
   real, parameter :: c2_3 = 2.0/3.0
@@ -754,6 +755,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
           endif !find_salt_root
 
           ! Real Calculation Loop
+          !print*, 'calculate ice ocean flux'
           do it1 = 1,20
             !PRINT *, 'Big it', it1
             ! Determine the potential temperature at the ice-ocean interface.
@@ -877,12 +879,29 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             exch_vel_s(i,j) = ustar_h * I_Gam_S
             if (CS%r22_gamma_convlimit_param) then
               ! If limiting to MK18 convective param, determine equivalent exchange velocity
-              exch_vel_t_conv(i,j) = c_1*(CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*(-1)*dR0_dS(i)*CS%kd_molec_salt**(1/2)/CS%kv_molec)**(1/3)* & 
-                                     (CS%kd_molec_temp)**(1/2)* Rhoml(i)/900 * cos(CS%r22_mk18_conv_angle*3.1415/180)**(2/3)
+              angle_rad = CS%r22_mk18_conv_angle*3.14159265/180.0
+              exch_vel_t_conv(i,j) = c_1*(CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*dR0_dS(i)*(CS%kd_molec_salt)**(1.0/2.0)/CS%kv_molec)**(1.0/3.0)* & 
+                                     (CS%kd_molec_temp)**(1.0/2.0)* Rhoml(i)/(900.0) * (cos(angle_rad))**(2.0/3.0)
               if (exch_vel_t_conv(i,j) > exch_vel_t(i,j)) then
+                 !print*, 'using MK18, gamma = ', exch_vel_t_conv(i,j)
+                 !print*, 'shear driven gamma = ',exch_vel_t(i,j)
+                 !print*, 'c_1= ', c_1
+                 !print*, 'g_Earth= ', CS%g_Earth
+                 !print*, 'sss= ', sfc_state%sss(i,j)
+                 !print*, 'Sbdry= ', Sbdry(i,j)
+                 !print*, 'dR0_dS= ', dR0_dS(i)
+                 !print*, 'kd_molec_salt= ', CS%kd_molec_salt
+                 !print*, 'kv_molec= ',CS%kv_molec
+                 !print*, 'kd_molec_temp= ', CS%kd_molec_temp
+                 !print*, 'Rhoml(i)= ', Rhoml(i)
+                 !print*, 'angle=', CS%r22_mk18_conv_angle
+                 !print*, 'cos(theta)', cos(angle_rad)
+                 !print*, 'cos(theta)**2/3= ', (cos(angle_rad))**(2.0/3.0)
                  ! use exchange velocity from convective param instead of shear-driven ustar one
                  exch_vel_t(i,j) = max( exch_vel_t(i,j), exch_vel_t_conv(i,j))
-                 exch_vel_s(i,j) = exch_vel_t(i,j)/35
+                 exch_vel_s(i,j) = max( exch_vel_s(i,j), exch_vel_t_conv(i,j)/35)
+                 wT_flux = exch_vel_t(i,j)* (ISS%tfreeze(i,j) - sfc_state%sst(i,j))
+                 ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
               endif
             endif
             ! Calculate the heat flux inside the ice shelf.
@@ -927,6 +946,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
               Sbdry_it = (sfc_state%sss(i,j) * mass_exch + CS%Salin_ice * ISS%water_flux(i,j)) / &
                          (mass_exch + ISS%water_flux(i,j))
               dS_it = Sbdry_it - Sbdry(i,j)
+              !print*, dS_it
               if (abs(dS_it) < 1.0e-4*(0.5*(sfc_state%sss(i,j) + Sbdry(i,j) + 1.0e-10*US%ppt_to_S))) exit
 
               if (dS_it < 0.0) then ! Sbdry is now the upper bound.
