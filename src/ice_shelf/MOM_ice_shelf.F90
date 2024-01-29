@@ -350,6 +350,9 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   real :: I_Gam_S_new       ! iteration transfer coeff for S
   ! Variables used in convective limit of param
   real :: c_1               ! Constant in Kerr and McConnochie 2015, default c_1 = 0.097
+  real :: test1
+  real :: test2
+  real :: test3, test4
   real :: angle_rad         ! Convert degrees into radians
   real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
     exch_vel_t_conv         !< Sub-shelf effective convective thermal exchange velocity [Z T-1 ~> m s-1]
@@ -762,7 +765,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             ! The following two lines are equivalent:
             ! call calculate_TFreeze(Sbdry(i,j), p_int(i), ISS%tfreeze(i,j), CS%eqn_of_state, scale_from_EOS=.true.)
             call calculate_TFreeze(Sbdry(i:i,j), p_int(i:i), ISS%tfreeze(i:i,j), CS%eqn_of_state)
-
+            !print*, 'Tfreeze = ', ISS%tfreeze(i,j)
+            !print*, 'Sbdry = ', Sbdry(i,j)
             dT_ustar = (ISS%tfreeze(i,j) - sfc_state%sst(i,j)) * ustar_h
             dS_ustar = (Sbdry(i,j) - sfc_state%sss(i,j)) * ustar_h
 
@@ -880,28 +884,48 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             if (CS%r22_gamma_convlimit_param) then
               ! If limiting to MK18 convective param, determine equivalent exchange velocity
               angle_rad = CS%r22_mk18_conv_angle*3.14159265/180.0
-              exch_vel_t_conv(i,j) = c_1*(CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*dR0_dS(i)*(CS%kd_molec_salt)**(1.0/2.0)/CS%kv_molec)**(1.0/3.0)* & 
-                                     (CS%kd_molec_temp)**(1.0/2.0)* Rhoml(i)/(900.0) * (cos(angle_rad))**(2.0/3.0)
+              !exch_vel_t_conv(i,j) = c_1*(CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*dR0_dS(i)*(CS%kd_molec_salt)**(1.0/2.0)/CS%kv_molec)**(1.0/3.0)* & 
+              !                       (CS%kd_molec_temp)**(1.0/2.0)* Rhoml(i)/(900.0) * (cos(angle_rad))**(2.0/3.0)
+              test1 = ((CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*dR0_dS(i)*(CS%kd_molec_salt)**(0.5)/CS%kv_molec)**(1.0/3.0))*c_1 *&
+                         (CS%kd_molec_temp)**(0.5)*Rhoml(i)/(900.0)
+              test2 = cos(angle_rad)
+              !test3 = test1**(1.0/3.0)
+              test4 = test2**(2.0/3.0)
+              exch_vel_t_conv(i,j) = test1*test4
               if (exch_vel_t_conv(i,j) > exch_vel_t(i,j)) then
-                 !print*, 'using MK18, gamma = ', exch_vel_t_conv(i,j)
-                 !print*, 'shear driven gamma = ',exch_vel_t(i,j)
-                 !print*, 'c_1= ', c_1
-                 !print*, 'g_Earth= ', CS%g_Earth
-                 !print*, 'sss= ', sfc_state%sss(i,j)
-                 !print*, 'Sbdry= ', Sbdry(i,j)
-                 !print*, 'dR0_dS= ', dR0_dS(i)
-                 !print*, 'kd_molec_salt= ', CS%kd_molec_salt
-                 !print*, 'kv_molec= ',CS%kv_molec
-                 !print*, 'kd_molec_temp= ', CS%kd_molec_temp
-                 !print*, 'Rhoml(i)= ', Rhoml(i)
-                 !print*, 'angle=', CS%r22_mk18_conv_angle
-                 !print*, 'cos(theta)', cos(angle_rad)
-                 !print*, 'cos(theta)**2/3= ', (cos(angle_rad))**(2.0/3.0)
-                 ! use exchange velocity from convective param instead of shear-driven ustar one
-                 exch_vel_t(i,j) = max( exch_vel_t(i,j), exch_vel_t_conv(i,j))
-                 exch_vel_s(i,j) = max( exch_vel_s(i,j), exch_vel_t_conv(i,j)/35)
-                 wT_flux = exch_vel_t(i,j)* (ISS%tfreeze(i,j) - sfc_state%sst(i,j))
-                 ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
+                !print*, 'i = ', i
+                !print*, 'j = ', j
+                !print*, 'using MK18, gamma = ', exch_vel_t_conv(i,j)
+                !print*, 'shear driven gamma = ',exch_vel_t(i,j)
+                !print*, 'c_1= ', c_1
+                !print*, 'g_Earth= ', CS%g_Earth
+                !print*, 'sss= ', sfc_state%sss(i,j)
+                !print*, 'sst= ', sfc_state%sst(i,j)
+                !print*, 'Sbdry= ', Sbdry(i,j)
+                !print*, 'sss-Sbdry= ',sfc_state%sss(i,j)-Sbdry(i,j)
+                !print*, 'ustar= ',ustar_h
+                !print*, 'p_int= ', p_int(i)
+                !print*, 'dR0_dS= ', dR0_dS(i)
+                !print*, 'kd_molec_salt= ', CS%kd_molec_salt
+                !print*, 'kv_molec= ',CS%kv_molec
+                !print*, 'kd_molec_temp= ', CS%kd_molec_temp
+                !print*, 'Rhoml(i)= ', Rhoml(i)
+                !print*, 'angle=', CS%r22_mk18_conv_angle
+                !print*, 'cos(theta)', cos(angle_rad)
+                !print*, 'cos(theta)**2/3= ', (cos(angle_rad))**(2.0/3.0)
+                !print*, 'factor except sss-sbdry = ', c_1*(CS%g_Earth*dR0_dS(i)*(CS%kd_molec_salt)**(1.0/2.0)/CS%kv_molec)**(1.0/3.0)* & 
+                !           (CS%kd_molec_temp)**(1.0/2.0)* Rhoml(i)/(900.0) * (cos(angle_rad))**(2.0/3.0)
+                !print*, 'test1 =', test1
+                !print*, 'test2 = ',test2
+                !print*, 'test3 = ',test3
+                !print*, 'test4 = ',test4
+                !print*, 'Rhoml/900', Rhoml(i)/(900.0)
+                !print*, 'kd_molec_salt**0.5 = ', (CS%kd_molec_salt)**(0.5)
+                ! use exchange velocity from convective param instead of shear-driven ustar one
+                exch_vel_t(i,j) = max( exch_vel_t(i,j), exch_vel_t_conv(i,j))
+                exch_vel_s(i,j) = max( exch_vel_s(i,j), exch_vel_t_conv(i,j)/35)
+                wT_flux = exch_vel_t(i,j)* (ISS%tfreeze(i,j) - sfc_state%sst(i,j))
+                ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
               endif
             endif
             ! Calculate the heat flux inside the ice shelf.
@@ -937,7 +961,8 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             !    dTi_dz = (CS%Temp_Ice - ISS%tfreeze(i,j)) / draft(i,j)
             !    ISS%tflux_shelf(i,j) = Rho_Ice * CS%Cp_ice * KTI * dTi_dz
 
-
+            !print*, 'water flux = ',ISS%water_flux(i,j)
+            !print*, 'exch_vel_t = ',exch_vel_t(i,j)
             if (CS%find_salt_root) then
               exit ! no need to do interaction, so exit loop
             else
