@@ -206,7 +206,7 @@ type, public :: ice_shelf_CS ; private
                                          !! used in the 3Eq. R22 formulation
   logical :: r22_gamma_convlimit_param   !< If true, limit to MK18 convective param at low ustar
   real :: r22_mk18_conv_angle            !< Angle for MK18 convective param
-
+  logical :: r22_gamma_convlimit_uselocalangle !< If true, calculate local angle for MK18 limit 
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
              id_tfreeze = -1, id_tfl_shelf = -1, &
@@ -355,7 +355,10 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   real :: test3, test4
   real :: angle_rad         ! Convert degrees into radians
   real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
-    exch_vel_t_conv         !< Sub-shelf effective convective thermal exchange velocity [Z T-1 ~> m s-1]
+    exch_vel_t_conv, &      ! Sub-shelf effective convective thermal exchange velocity [Z T-1 ~> m s-1]
+    local_slope, &          ! Local slope calculated from draft
+    draft                   ! Draft calculated from ice mass over water density
+  real :: dhx, dx, dhy, dy
   
 
   real, parameter :: c2_3 = 2.0/3.0
@@ -471,7 +474,42 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   else ! There is no shelf here.
     fluxes%ustar_shelf(i,j) = 0.0
   endif ; enddo ; enddo
-
+  ! calculate local angle if needed
+  ! Note a lot of the below loop uses hard coded values, need to fix.
+  if (CS%r22_gamma_convlimit_uselocalangle) then
+    do j=js,je
+      do i=is,ie
+        draft(i,j) = ISS%mass_shelf(i,j)/1028
+      enddo
+    enddo
+    do j=js,je
+      do i=is,ie
+        if (i == is) then
+            dhx = draft(i+1,j)-draft(i,j)
+            dx = 2000
+        elseif (i == ie) then
+            dhx = draft(i,j)-draft(i-1,j)
+            dx = 2000
+        else
+            dhx = draft(i+1,j)-draft(i-1,j)
+            dx = 2*2000
+        endif
+        if (j == js) then
+            dhy = draft(i,j+1)-draft(i,j)
+            dy = 2*2000
+        elseif (j == je) then
+            dhy = draft(i,j)-draft(i,j-1)
+            dy = 2*2000
+        else
+            dhy = draft(i,j+1)-draft(i,j-1)
+            dy = 2*2000
+        endif
+        local_slope(i,j) = sqrt((dhx/dx)**2.0+(dhy/dy)**2.0)
+        local_slope(i,j) = atan(local_slope(i,j))*180/3.1415   
+ 
+      enddo
+    enddo
+  endif
   EOSdom(:) = EOS_domain(G%HI)
   do j=js,je
     ! Find the pressure at the ice-ocean interface, averaged only over the
@@ -1864,6 +1902,8 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces_in,
                  "and Kerr (2018) convective parameterisation. Kerr and McConnochie (2015) "//&
                  "can be retrieved with angle 0.", &
                  units = "nondim", default=7.5e1)
+  call get_param(param_file, mdl, "SHELF_3EQ_R22_CONV_ANGLE_USE_LOCAL", CS%r22_gamma_convlimit_uselocalangle, &
+                 "Use local angle rather than constant.", default = .false.)
     !endif
   !endif
 
