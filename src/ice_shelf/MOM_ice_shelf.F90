@@ -921,7 +921,12 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             exch_vel_s(i,j) = ustar_h * I_Gam_S
             if (CS%r22_gamma_convlimit_param) then
               ! If limiting to MK18 convective param, determine equivalent exchange velocity
-              angle_rad = CS%r22_mk18_conv_angle*3.14159265/180.0
+              if (CS%r22_gamma_convlimit_uselocalangle) then
+                angle_rad = (90.0-local_slope(i,j))*3.14159265/180.0
+              else
+              ! use constant
+                angle_rad = CS%r22_mk18_conv_angle*3.14159265/180.0
+              endif
               !exch_vel_t_conv(i,j) = c_1*(CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*dR0_dS(i)*(CS%kd_molec_salt)**(1.0/2.0)/CS%kv_molec)**(1.0/3.0)* & 
               !                       (CS%kd_molec_temp)**(1.0/2.0)* Rhoml(i)/(900.0) * (cos(angle_rad))**(2.0/3.0)
               test1 = ((CS%g_Earth*(sfc_state%sss(i,j)-Sbdry(i,j))*dR0_dS(i)*(CS%kd_molec_salt)**(0.5)/CS%kv_molec)**(1.0/3.0))*c_1 *&
