@@ -465,7 +465,12 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
       call calc_sfc_displacement(PF, G, GV, US, mass_shelf, tv, h)
     endif
   endif
-
+  ! Initialize TS again with updated ice shelf depth (HACKY!!! CY)
+  !if (new_sim .and. use_ice_shelf .and. present(mass_shelf)) then
+  !  call ISOMIP_initialize_temperature_salinity (tv%T, tv%S, h, &
+  !                                depth_tot, G, GV, US, PF, eos, just_read=just_read)
+  !  print*, 'Reinitializing TS with TS_CONFIG = ISOMIP'
+  !endif
   ! Perhaps we want to run the regridding coordinate generator for multiple
   ! iterations here so the initial grid is consistent with the coordinate
   if (useALE) then
