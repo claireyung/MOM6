@@ -3062,7 +3062,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     allocate(h_new_u(IsdB:IedB, jsd:jed, nz), source=0.0)
     allocate(h_old_v(isd:ied, JsdB:JedB, nz), source=0.0)
     allocate(h_new_v(isd:ied, JsdB:JedB, nz), source=0.0)
-    if (use_ice_shelf) then
+    if (use_ice_shelf) then !!Claire - add forced remap extrap at bounadries for ice shelf. needed for sigma!
       call ALE_regrid(G, GV, US, CS%h, h_new, dzRegrid, CS%tv, CS%ALE_CSp, CS%frac_shelf_h, PCM_cell)
     else
       call ALE_regrid(G, GV, US, CS%h, h_new, dzRegrid, CS%tv, CS%ALE_CSp, PCM_cell=PCM_cell)

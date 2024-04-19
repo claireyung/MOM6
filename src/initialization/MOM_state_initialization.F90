@@ -1217,7 +1217,12 @@ subroutine trim_for_ice(PF, G, GV, US, ALE_CSp, tv, h, just_read)
     call cut_off_column_top(GV%ke, tv, GV, US, GV%g_Earth, G%bathyT(i,j)+G%Z_ref, &
                min_thickness, tv%T(i,j,:), T_t(i,j,:), T_b(i,j,:), &
                tv%S(i,j,:), S_t(i,j,:), S_b(i,j,:), p_surf(i,j), h(i,j,:), remap_CS, &
-               z_tol=z_tolerance, remap_answer_date=remap_answer_date)
+               z_tol=z_tolerance, remap_answer_date=remap_answer_date, debug = (i==24 .and. j==4))
+if (i==24 .and. j==4) then
+print *,'h=', h(i,j,:)
+print *,'T=', tv%T(i,j,:)
+print *,'S=',tv%S(i,j,:)
+endif
   enddo ; enddo
 
 end subroutine trim_for_ice
@@ -1308,7 +1313,7 @@ end subroutine calc_sfc_displacement
 !> Adjust the layer thicknesses by removing the top of the water column above the
 !! depth where the hydrostatic pressure matches p_surf
 subroutine cut_off_column_top(nk, tv, GV, US, G_earth, depth, min_thickness, T, T_t, T_b, &
-                              S, S_t, S_b, p_surf, h, remap_CS, z_tol, remap_answer_date)
+                              S, S_t, S_b, p_surf, h, remap_CS, z_tol, remap_answer_date, debug)
   integer,               intent(in)    :: nk  !< Number of layers
   type(thermo_var_ptrs), intent(in)    :: tv  !< Thermodynamics structure
   type(verticalGrid_type), intent(in)  :: GV  !< The ocean's vertical grid structure.
@@ -1332,7 +1337,7 @@ subroutine cut_off_column_top(nk, tv, GV, US, G_earth, depth, min_thickness, T, 
                                                 !! expressions to use for remapping.  Values below 20190101
                                                 !! recover the remapping answers from 2018, while higher
                                                 !! values use more robust forms of the same remapping expressions.
-
+  logical, optional, intent(in)         :: debug
   ! Local variables
   real, dimension(nk+1) :: e ! Top and bottom edge positions for reconstructions [Z ~> m]
   real, dimension(nk) :: h0, h1 ! Initial and remapped layer thicknesses [H ~> m or kg m-2]
@@ -1417,12 +1422,28 @@ subroutine cut_off_column_top(nk, tv, GV, US, G_earth, depth, min_thickness, T, 
       T0(k) = T(nk+1-k)
       h1(k) = h(nk+1-k)
     enddo
+    if (debug) then
+     print*,'S0', S0
+     print*,'T0', T0
+     print*, 'h0',h0 
+     print*, 'h1',h1
+     print*,'dS0',S0(2:nk) - S0(1:nk-1)
+     print*,'dS0/dz', 2.*( S0(2:nk) - S0(1:nk-1) ) / ( h0(2:nk) + h0(1:nk-1) )
+     print*,'sum(h1)=',sum(h1),'sum(h0)=',sum(h0)
+    endif
     if (answers_2018) then
       call remapping_core_h(remap_CS, nk, h0, T0, nk, h1, T1, 1.0e-30*GV%m_to_H, 1.0e-10*GV%m_to_H)
       call remapping_core_h(remap_CS, nk, h0, S0, nk, h1, S1, 1.0e-30*GV%m_to_H, 1.0e-10*GV%m_to_H)
+stop
     else
       call remapping_core_h(remap_CS, nk, h0, T0, nk, h1, T1, GV%H_subroundoff, GV%H_subroundoff)
-      call remapping_core_h(remap_CS, nk, h0, S0, nk, h1, S1, GV%H_subroundoff, GV%H_subroundoff)
+      call remapping_core_h(remap_CS, nk, h0, S0, nk, h1, S1, GV%H_subroundoff, GV%H_subroundoff, debug=debug)
+    endif
+    if (debug) then
+     print*,'S1',S1
+     print*,'T1',T1
+     print*,'dS1',S1(2:nk) - S1(1:nk-1)
+     print*,'dS1/dz', 2.*( S1(2:nk) - S1(1:nk-1) ) / ( h1(2:nk) + h1(1:nk-1) )
     endif
     do k=1,nk
       S(k) = S1(nk+1-k)

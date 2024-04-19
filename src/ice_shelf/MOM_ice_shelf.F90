@@ -515,6 +515,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
           endif !find_salt_root
 
           do it1 = 1,20
+            !print*, it1
             ! Determine the potential temperature at the ice-ocean interface.
             ! The following two lines are equivalent:
             ! call calculate_TFreeze(Sbdry(i,j), p_int(i), ISS%tfreeze(i,j), CS%eqn_of_state, scale_from_EOS=.true.)
@@ -583,6 +584,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
                 wB_flux_new = wB_flux - (wB_flux_new - wB_flux) / dDwB_dwB_in
                 ! Update wB_flux
                 if (CS%buoy_flux_itt_bug) wB_flux = wB_flux_new
+                print*, 'looping again'
               enddo !it3
             endif
 

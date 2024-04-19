@@ -1,4 +1,4 @@
-!> Finite volume pressure gradient (integrated by quadrature or analytically)
+!/> Finite volume pressure gradient (integrated by quadrature or analytically)
 module MOM_PressureForce_FV
 
 ! This file is part of MOM6. See LICENSE.md for the license.
@@ -21,6 +21,9 @@ use MOM_density_integrals, only : int_density_dz_generic_plm, int_density_dz_gen
 use MOM_density_integrals, only : int_spec_vol_dp_generic_plm
 use MOM_density_integrals, only : int_density_dz_generic_pcm, int_spec_vol_dp_generic_pcm
 use MOM_ALE, only : TS_PLM_edge_values, TS_PPM_edge_values, ALE_CS
+
+use netcdf
+use MOM_netcdf, only: export_real_array_2d, export_real_array_3d
 
 implicit none ; private
 
@@ -47,6 +50,8 @@ type, public :: PressureForce_FV_CS ; private
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                             !! timing of diagnostic output.
   logical :: useMassWghtInterp !< Use mass weighting in T/S interpolation
+  logical :: correction_intxpa, &
+             correction_intxpa_5pt
   logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
                             !! method to calculate density anomalies, as used prior to
                             !! March 2018.
@@ -503,7 +508,9 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     intx_pa, &  ! The zonal integral of the pressure anomaly along the interface
                 ! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
-    intx_dpa    ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+    intx_dpa, &    ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+!    rho_top, &
+    correction
   real, dimension(SZI_(G),SZJB_(G)) :: &
     inty_pa, &  ! The meridional integral of the pressure anomaly along the
                 ! interface atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
@@ -519,6 +526,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
                 ! of salinity within each layer [S ~> ppt].
     T_t, T_b    ! Top and bottom edge values for linear reconstructions
                 ! of temperature within each layer [C ~> degC].
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+    rho_top
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
     rho_pgf, rho_stanley_pgf ! Density [R ~> kg m-3] from EOS with and without SGS T variance
                              ! in Stanley parameterization.
@@ -546,6 +555,14 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
   integer :: i, j, k
+  !Claire
+  real :: T5(5), S5(5) ! Temperatures and salinities at five quadrature points [C ~> degC] and [S ~> ppt]
+  real :: p5(5),p5r(5),p5l(5)      ! Pressures at five quadrature points [R L2 T-2 ~> Pa]
+  real :: r5(5)      ! Densities at five quadrature points [R ~> kg m-3]
+  real, parameter :: C1_90 = 1.0/90.0  ! A rational constant [nondim]
+  real :: wt_R, B
+  integer :: m, nPFuloop
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: PFupB, PFumB
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
@@ -716,7 +733,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       call TS_PPM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
     endif
   endif
-
+  ! Claire
+  do nPFuloop = 1,3
   ! Set the surface boundary conditions on pressure anomaly and its horizontal
   ! integrals, assuming that the surface pressure anomaly varies linearly
   ! in x and y.
@@ -724,6 +742,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       pa(i,j) = (rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref) + p_atm(i,j)
+      !print*, 'patm', p_atm(i,j), 'rho_ref term', (rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
     enddo ; enddo
   else
     !$OMP parallel do default(shared)
@@ -732,13 +751,151 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     enddo ; enddo
   endif
   !$OMP parallel do default(shared)
-  do j=js,je ; do I=Isq,Ieq
-    intx_pa(I,j) = 0.5*(pa(i,j) + pa(i+1,j))
-  enddo ; enddo
+  ! Claire
+  !do nPFuloop = 1,3
+  if (CS%correction_intxpa_5pt) then
+   !print*, 'hi'
+    ! Assume linear T,S,p and calculate rho at each point
+    do j=js,je ; do I=Isq,Ieq; 
+      T5(1)=T_t(I,j,1) ; T5(5)=T_t(I+1,j,1)
+      S5(1)=S_t(I,j,1) ; S5(5)=S_t(I+1,j,1)
+      ! Pressure input to density EOS should be real pressure not rho_ref, I think
+      p5(1)=pa(I,j)-(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+      p5(5)=pa(I+1,j)-(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+      do m=2,4
+       wt_R =  0.25*real(m-1)
+       !print*,wt_R
+       ! Here is where to add a varying T/S interpolation
+       B = 0.0
+       !if (nPFuloop == 1) then
+       ! B = 1.0
+       !elseif (nPFuloop == 2) then
+       ! B = -1.0
+       !else
+       ! B = 0.0
+       !endif 
+       T5(m) = T5(1)+(T5(5)-T5(1))*wt_R+ (T5(5)-T5(1))*B*wt_R*(wt_R-1);
+       S5(m) = S5(1)+(S5(5)-S5(1))*wt_R+ (S5(5)-S5(1))*B*wt_R*(wt_R-1);
+       p5(m) = p5(1)+(p5(5)-p5(1))*wt_R;
+       !print*,S5(m)
+      enddo
+      call calculate_density(T5, S5, p5, r5, tv%eqn_of_state, rho_ref=rho_ref)
+      !Calculate pressure piecewise from the left (from the right might give a different answer?)
+      !overwrite p(m) using p = p_prev + bar(rho)gdz
+      ! Use rhoref now for the pressure 
+      do m=1,5
+       p5(m) = p5(m) +(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+      enddo
+      p5l(1) = p5(1); p5r(1)=p5(1); p5l(5) = p5(5); p5r(5) = p5(5)
+      do m=2,4
+       !p5l(m) = p5l(m-1)-(r5(m)+r5(m-1))*GV%g_Earth*0.25*(e(I+1,j,1)-e(I,j,1))/2
+       p5l(m) = p5l(m-1)+((p5(5)-p5(1))/4.+1./4.*(r5(5)+r5(1))*GV%g_Earth*(e(I+1,j,1)-e(I,j,1))/2. - &
+               ((r5(m)+r5(m-1))*GV%g_Earth*0.25*(e(I+1,j,1)-e(I,j,1))/2.))
+      enddo
+      !do m=2,4
+      ! p5r(6-m) = p5r(7-m)+(r5(6-m)+r5(7-m))*GV%g_Earth*0.25*(e(I+1,j,1)-e(I,j,1))/2
+      !enddo
+      !print*,'p5l-p5r',p5l-p5r
+      !print*,'p5(5)-p5(1)',p5(5)-p5(1)
+      !print*,'1/4p_nh',(p5(5)-p5(1))/4.+1/4.*(r5(5)+r5(1))*GV%g_Earth*(e(I+1,j,1)-e(I,j,1))/2.
+      !print*,'p_h',1./4.*(r5(5)+r5(1))*GV%g_Earth*(e(I+1,j,1)-e(I,j,1))/2.
+      !print*, 'p5',p5l
+      ! Piecewise from left and from right are a little different. Take the mean.
+      do m=2,4
+      ! p5(m) = 0.5*(p5l(m)+p5r(m))
+      ! Before pressure was linearly interpolated, now we step-by-step ca
+      ! p5(m) = max(p5l(m),p5r(m))
+      ! p5(m) = p5r(m)
+       p5(m) = p5l(m)
+      enddo
+      !calculate integral of pressure using Boole's rule
+      !if ((j == 4) .or. (j==5)) then
+      ! print*, 'p5',p5,'r5',r5 
+      !endif
+      intx_pa(I,j) = C1_90*(7.0*(p5(1)+p5(5)) + 32.0*(p5(2)+p5(4)) + 12.0*p5(3))
+      !print*, 'intxpa', intx_pa(I,j)
+    enddo ; enddo
+  else ! dont compute with 5 points
+   if (CS%correction_intxpa) then
+     do j=Jsq,Jeq+1
+      call calculate_density(T_t(:,j,1), S_t(:,j,1), p_ref, rho_top(:,j), &
+                                 tv%eqn_of_state, EOSdom)
+     enddo
+   endif
+  !print*,rho_top
+   do j=js,je ; do I=Isq,Ieq
+    if (CS%correction_intxpa) then
+     correction(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+     !correction(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))/2
+     !correction(I,j) = min(0.,-(rho_top(I+1,j)-rho_top(I,j))*(pa(i+1,j)-pa(i,j))/12 * &
+     !                   2/(rho_top(I+1,j)+rho_top(I,j)-2*rho_ref))
+     !print*, 'correction', correction(I,j)
+     !print*, 'dp', (pa(i+1,j)-pa(i,j))
+     !print*, 'dp-assump', (rho_top(I+1,j)+rho_top(I,j)-2*rho_ref)/2*(e(i+1,j,1)-e(i,j,1))*GV%g_Earth
+     !print*, rho_top(I+1,j)
+     !print*, 'old correction', (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+     intx_pa(I,j) = 0.5*(pa(i,j) + pa(i+1,j)) + correction(I,j)
+    else
+     intx_pa(I,j) = 0.5*(pa(i,j) + pa(i+1,j))
+    endif
+   enddo ; enddo
+  endif
+  !print*, intx_pa(24,4), 0.5*(pa(24,5) + pa(25,4)), correction(24,4)
   !$OMP parallel do default(shared)
   do J=Jsq,Jeq ; do i=is,ie
-    inty_pa(i,J) = 0.5*(pa(i,j) + pa(i,j+1))
+    if (CS%correction_intxpa) then
+     correction(i,J) = (rho_top(i,J+1)-rho_top(i,J))*GV%g_Earth/12*(e(i,j+1,1)-e(i,j,1))
+     inty_pa(i,J) = 0.5*(pa(i,j) + pa(i,j+1)) + correction(i,J)
+    else
+     inty_pa(i,J) = 0.5*(pa(i,j) + pa(i,j+1))
+    endif
   enddo ; enddo
+  !print*,'pa(26,4)',pa(26,4),'pa(27,4)',pa(27,4)
+  !print*, 'k=19'
+  !print*,'T_t', T_t(26,4,19), T_t(27,4,19)
+  !print*,'T_b', T_b(26,4,19), T_b(27,4,19)
+  !print*,'S_t', S_t(26,4,19),S_t(27,4,19)
+  !print*,'S_b', S_b(26,4,19),S_b(27,4,19)
+  !print*,'e', e(26,4,19),e(27,4,19),e(26,4,20),e(27,4,20)
+  !print*, 'k=20'
+  !print*,'T_t', T_t(26,4,20), T_t(27,4,20)
+  !print*,'T_b', T_b(26,4,20), T_b(27,4,20)
+  !print*,'S_t', S_t(26,4,20),S_t(27,4,20)
+  !print*,'S_b', S_b(26,4,20),S_b(27,4,20)
+  !print*,'e', e(26,4,20),e(27,4,20),e(26,4,21),e(27,4,21)
+  !print*, 'k=10'
+  !print*,'T_t', T_t(24,4,10), T_t(25,4,10)
+  !print*,'T_b', T_b(24,4,10), T_b(25,4,10)
+  !print*,'S_t', S_t(24,4,10),S_t(25,4,10)
+  !print*,'S_b', S_b(24,4,10),S_b(25,4,10)
+  !print*,'e', e(24,4,10),e(25,4,10),e(24,4,11),e(25,4,11)
+  !print*, 'k=9'
+  !print*,'T_t', T_t(24,4,9), T_t(25,4,9)
+  !print*,'T_b', T_b(24,4,9), T_b(25,4,9)
+  !print*,'S_t', S_t(24,4,9),S_t(25,4,9)
+  !print*,'S_b', S_b(24,4,9),S_b(25,4,9)
+  !print*,'e', e(24,4,9),e(25,4,9),e(24,4,10),e(25,4,10)
+  !print*,'etop',e(24,4,1),e(25,4,1)
+  !print*,'ebot', e(24,4,21),e(24,4,21)
+  !print*, 'k=8'
+  !print*,'T_t', T_t(24,4,8), T_t(25,4,8)
+  !print*,'T_b', T_b(24,4,8), T_b(25,4,8)
+  !print*,'S_t', S_t(24,4,8),S_t(25,4,8)
+  !print*,'S_b', S_b(24,4,8),S_b(25,4,8)
+  !print*,'e', e(24,4,8),e(25,4,8),e(24,4,9),e(25,4,9)
+  !print*, 'k=1'
+  !print*,'T_t', T_t(18,4,1), T_t(19,4,1)
+  !print*,'T_b', T_b(18,4,1), T_b(19,4,1)
+  !print*,'S_t', S_t(18,4,1),S_t(19,4,1)
+  !print*,'S_b', S_b(18,4,1),S_b(19,4,1)
+  !print*,'e', e(18,4,1),e(19,4,1),e(18,4,2),e(19,4,2)
+  !print*, 'k=2'
+  !print*,'T_t', T_t(18,4,2), T_t(19,4,2)
+  !print*,'T_b', T_b(18,4,2), T_b(19,4,2)
+  !print*,'S_t', S_t(18,4,2),S_t(19,4,2)
+  !print*,'S_b', S_b(18,4,2),S_b(19,4,2)
+  !print*,'e', e(18,4,2),e(19,4,2),e(18,4,3),e(19,4,3)
+
 
   do k=1,nz
     ! Calculate 4 integrals through the layer that are required in the
@@ -751,11 +908,147 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       ! where the layers are located.
       if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
         if ( CS%Recon_Scheme == 1 ) then
+         B = 0.0
+         if (nPFuloop == 1) then
+          B = 1.0
+         elseif (nPFuloop == 2) then
+          B = -1.0
+         else
+          B = 0.0
+         endif
           call int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa, intz_dpa, intx_dpa, inty_dpa, &
                     useMassWghtInterp=CS%useMassWghtInterp, &
-                    use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=G%Z_ref)
+                    use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=G%Z_ref,Bint=B)
+          !if ((k==19) .or. (k==20)) then
+           !print*, 'k=',k,' ,dpa',dpa(26,4)
+           !print*, 'intz_dpal',intz_dpa(26,4)
+           !print*, 'intz_dpar',intz_dpa(27,4)
+           !print*, 'intx_dpa',intx_dpa(26,4)
+           !print*, 'pal',pa(26,4)
+           !print*, 'par',pa(27,4)
+           !print*, 'h(i+1,j,k) - h(i,j,k)',h(27,4,k) - h(26,4,k)
+           !print*, 'e(i+1,j,K+1) - e(i,j,K+1)',e(27,4,K+1) - e(26,4,K+1)
+           !print*, 'term1', ((pa(26,4)*h(26,4,k) + intz_dpa(26,4)) - &
+           !        (pa(27,4)*h(27,4,k) + intz_dpa(27,4)))
+           !print*, 'term2', ((h(27,4,k) - h(26,4,k)) * intx_pa(26,4) - &
+           !        (e(27,4,K+1) - e(26,4,K+1)) * intx_dpa(26,4) * GV%Z_to_H)
+           !print*, 'term3', ((2.0*I_Rho0*G%IdxCu(26,4)) / &
+           !        ((h(26,4,k) + h(27,4,k)) + h_neglect))
+           !print*, 'hl',h(26,4,k)
+           !print*, 'hr',h(27,4,k)
+           !print*, 'deltapah',((pa(26,4)*h(26,4,k)) - &
+           !        (pa(27,4)*h(27,4,k)))
+           !print*, 'deltaintz',intz_dpa(26,4)-intz_dpa(27,4)
+          !endif
+          !if ((k==9).or.(k==10)) then
+          ! print*, 'k=',k,' dpa',dpa(24,4)
+          ! print*, 'intz_dpal',intz_dpa(24,4)
+          ! print*, 'intz_dpar',intz_dpa(25,4)
+          ! print*, 'intx_dpa',intx_dpa(24,4)
+          ! print*, 'pal',pa(24,4)
+          ! print*, 'par',pa(25,4)
+          ! print*, 'h(i+1,j,k) - h(i,j,k)',h(25,4,k) - h(24,4,k)
+          ! print*, 'e(i+1,j,K+1) - e(i,j,K+1)',e(25,4,K+1) - e(24,4,K+1)
+          ! print*, 'term1', ((pa(24,4)*h(24,4,k) + intz_dpa(24,4)) - &
+          !         (pa(25,4)*h(25,4,k) + intz_dpa(25,4)))
+          ! print*, 'term2', ((h(25,4,k) - h(24,4,k)) * intx_pa(24,4) - &
+          !         (e(25,4,K+1) - e(24,4,K+1)) * intx_dpa(24,4) * GV%Z_to_H)
+          ! print*, 'term3', ((2.0*I_Rho0*G%IdxCu(24,4)) / &
+          !         ((h(24,4,k) + h(25,4,k)) + h_neglect))
+          ! print*, 'hl',h(24,4,k)
+          ! print*, 'hr',h(25,4,k)
+          ! print*, 'deltapah',((pa(24,4)*h(24,4,k)) - &
+          !         (pa(25,4)*h(25,4,k)))
+          ! print*, 'deltaintz',intz_dpa(24,4)-intz_dpa(25,4)
+          !endif
+          !if ((k==1).or.(k==2)) then
+          ! print*, 'k=',k,' dpa',dpa(18,4)
+          ! print*, 'intz_dpal',intz_dpa(18,4)
+          ! print*, 'intz_dpar',intz_dpa(19,4)
+          ! print*, 'intx_dpa',intx_dpa(18,4)
+          ! print*, 'pal',pa(18,4)
+          ! print*, 'par',pa(19,4)
+          ! print*, 'h(i+1,j,k) - h(i,j,k)',h(19,4,k) - h(18,4,k)
+          ! print*, 'e(i+1,j,K+1) - e(i,j,K+1)',e(19,4,K+1) - e(18,4,K+1)
+          ! print*, 'term1', ((pa(18,4)*h(18,4,k) + intz_dpa(18,4)) - &
+          !         (pa(19,4)*h(19,4,k) + intz_dpa(19,4)))
+          ! print*, 'term2', ((h(19,4,k) - h(18,4,k)) * intx_pa(18,4) - &
+          !         (e(19,4,K+1) - e(18,4,K+1)) * intx_dpa(18,4) * GV%Z_to_H)
+          ! print*, 'term3', ((2.0*I_Rho0*G%IdxCu(18,4)) / &
+          !         ((h(18,4,k) + h(19,4,k)) + h_neglect))
+          ! print*, 'hl',h(18,4,k)
+          ! print*, 'hr',h(19,4,k)
+          ! print*, 'deltapah',((pa(18,4)*h(18,4,k)) - &
+          !         (pa(19,4)*h(19,4,k)))
+          ! print*, 'deltaintz',intz_dpa(18,4)-intz_dpa(19,4)
+          !endif
+
+!          if (k==2) then
+!           print*, 'k=2, dpa',dpa(24,4)
+!           print*, 'intz_dpal',intz_dpa(24,4)
+!           print*, 'intz_dpar',intz_dpa(25,4)
+!           print*, 'intx_dpa',intx_dpa(24,4)
+!           print*, 'pal',pa(24,4)
+!           print*, 'par',pa(25,4)
+!           print*, 'h(i+1,j,k) - h(i,j,k)',h(25,4,k) - h(24,4,k)
+!           print*, 'e(i+1,j,K+1) - e(i,j,K+1)',e(25,4,K+1) - e(24,4,K+1)
+!           print*, 'term1', ((pa(24,4)*h(24,4,k) + intz_dpa(24,4)) - &
+!                   (pa(25,4)*h(25,4,k) + intz_dpa(25,4)))
+!           print*, 'term2', ((h(25,4,k) - h(24,4,k)) * intx_pa(24,4) - &
+!                   (e(25,4,K+1) - e(24,4,K+1)) * intx_dpa(24,4) * GV%Z_to_H)
+!           print*, 'term3', ((2.0*I_Rho0*G%IdxCu(24,4)) / &
+!                   ((h(24,4,k) + h(25,4,k)) + h_neglect))
+!           print*, 'hl',h(24,4,k)
+!           print*, 'hr',h(25,4,k)
+!           print*, 'deltapah',((pa(24,4)*h(24,4,k)) - &
+!                   (pa(25,4)*h(25,4,k)))
+!           print*, 'deltaintz',intz_dpa(24,4)-intz_dpa(25,4)
+!          endif
+          !if (k==8) then
+           !print*, 'k=8, dpa',dpa(24,4)
+           !print*, 'intz_dpal',intz_dpa(24,4)
+           !print*, 'intz_dpar',intz_dpa(25,4)
+           !print*, 'intx_dpa',intx_dpa(24,4)
+           !print*, 'pal',pa(24,4)
+           !print*, 'par',pa(25,4)
+           !print*, 'h(i+1,j,k) - h(i,j,k)',h(25,4,k) - h(24,4,k)
+           !print*, 'e(i+1,j,K+1) - e(i,j,K+1)',e(25,4,K+1) - e(24,4,K+1)
+           !print*, 'term1', ((pa(24,4)*h(24,4,k) + intz_dpa(24,4)) - &
+           !        (pa(25,4)*h(25,4,k) + intz_dpa(25,4)))
+           !print*, 'term2', ((h(25,4,k) - h(24,4,k)) * intx_pa(24,4) - &
+           !        (e(25,4,K+1) - e(24,4,K+1)) * intx_dpa(24,4) * GV%Z_to_H)
+           !print*, 'term3', ((2.0*I_Rho0*G%IdxCu(24,4)) / &
+           !        ((h(24,4,k) + h(25,4,k)) + h_neglect)) 
+           !print*, 'hl',h(24,4,k)
+           !print*, 'hr',h(25,4,k)
+           !print*, 'deltapah',((pa(24,4)*h(24,4,k)) - &
+           !        (pa(25,4)*h(25,4,k)))
+           !print*, 'deltaintz',intz_dpa(24,4)-intz_dpa(25,4)
+          !endif
+          !if (k==1) then
+           !print*, 'k=8, dpa',dpa(24,4)
+           !print*, 'intz_dpal',intz_dpa(24,4)
+           !print*, 'intz_dpar',intz_dpa(25,4)
+           !print*, 'intx_dpa',intx_dpa(24,4)
+           !print*, 'pal',pa(24,4)
+           !print*, 'par',pa(25,4)
+           !print*, 'h(i+1,j,k) - h(i,j,k)',h(25,4,k) - h(24,4,k)
+           !print*, 'e(i+1,j,K+1) - e(i,j,K+1)',e(25,4,K+1) - e(24,4,K+1)
+           !print*, 'term1', ((pa(24,4)*h(24,4,k) + intz_dpa(24,4)) - &
+           !        (pa(25,4)*h(25,4,k) + intz_dpa(25,4)))
+           !print*, 'term2', ((h(25,4,k) - h(24,4,k)) * intx_pa(24,4) - &
+           !        (e(25,4,K+1) - e(24,4,K+1)) * intx_dpa(24,4) * GV%Z_to_H)
+           !print*, 'term3', ((2.0*I_Rho0*G%IdxCu(24,4)) / &
+           !        ((h(24,4,k) + h(25,4,k)) + h_neglect))
+           !print*, 'hl',h(24,4,k)
+           !print*, 'hr',h(25,4,k)
+           !print*, 'deltapah',((pa(24,4)*h(24,4,k)) - &
+           !        (pa(25,4)*h(25,4,k)))
+           !print*, 'deltaintz',intz_dpa(24,4)-intz_dpa(25,4)
+          !endif
+
         elseif ( CS%Recon_Scheme == 2 ) then
           call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
@@ -815,7 +1108,28 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       pa(i,j) = pa(i,j) + dpa(i,j)
     enddo ; enddo
   enddo
-
+       if (nPFuloop == 1) then
+        call export_real_array_3d('PFuB1.nc',PFu,'PFu')
+        PFupB = PFu
+       elseif (nPFuloop == 2) then
+        call export_real_array_3d('PFuB-1.nc',PFu,'PFu')
+        PFumB = PFu
+       else
+        call export_real_array_3d('PFuB0.nc',PFu,'PFu')
+       endif
+  call export_real_array_3d('S_t.nc',S_t,'S_t')
+  call export_real_array_3d('S_b.nc',S_b,'S_b')
+  !call export_real_array_3d('PFu.nc',PFu,'PFu')
+  !print*, 'PFu',PFu(26,4,:)
+  !print*,'PFu 11', PFu(23,4,11),PFu(24,4,11), PFu(25,4,11)
+  !print*,'PFu 10', PFu(23,4,10),PFu(24,4,10), PFu(25,4,10)
+  !print*,'PFu 9', PFu(23,4,9),PFu(24,4,9), PFu(25,4,9)
+  !print*,'PFu 8', PFu(23,4,8),PFu(24,4,8), PFu(25,4,8)
+  !print*,'PFu 1', PFu(23,4,1),PFu(24,4,1), PFu(25,4,1)
+  !print*,'PFu 1', PFu(17,4,1),PFu(18,4,1), PFu(19,4,1)
+  !print*,'PFu 2', PFu(17,4,2),PFu(18,4,2), PFu(19,4,2)
+  enddo !nPFuloop
+!PFupB, PFumB 
   if (CS%GFS_scale < 1.0) then
     do k=1,nz
       !$OMP parallel do default(shared)
@@ -974,6 +1288,12 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
                  "If true, use mass weighting when interpolating T/S for "//&
                  "integrals near the bathymetry in FV pressure gradient "//&
                  "calculations.", default=.false.)
+  call get_param(param_file, mdl, "CORRECTION_INTXPA",CS%correction_intxpa, &
+                 "If true, use a correction for intxpa needed for ice shelves", &
+                 default = .false.)
+  call get_param(param_file, mdl, "CORRECTION_INTXPA_5PT",CS%correction_intxpa_5pt, &
+                 "If true, use 5point quadrature to calculate intxpa", &
+                 default = .false.)
   call get_param(param_file, mdl, "USE_INACCURATE_PGF_RHO_ANOM", CS%use_inaccurate_pgf_rho_anom, &
                  "If true, use a form of the PGF that uses the reference density "//&
                  "in an inaccurate way. This is not recommended.", default=.false.)

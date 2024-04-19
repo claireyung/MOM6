@@ -313,7 +313,7 @@ end subroutine int_density_dz_generic_pcm
 subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
                                       rho_0, G_e, dz_subroundoff, bathyT, HI, GV, EOS, US, use_stanley_eos, dpa, &
                                       intz_dpa, intx_dpa, inty_dpa, useMassWghtInterp, &
-                                      use_inaccurate_form, Z_0p)
+                                      use_inaccurate_form, Z_0p, Bint)
   integer,              intent(in)  :: k   !< Layer index to calculate integrals for
   type(hor_index_type), intent(in)  :: HI  !< Ocean horizontal index structures for the input arrays
   type(verticalGrid_type), intent(in) :: GV !< Vertical grid structure
@@ -358,6 +358,8 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
   logical,    optional, intent(in)  :: use_inaccurate_form !< If true, uses an inaccurate form of
                                            !! density anomalies, as was used prior to March 2018.
   real,       optional, intent(in)  :: Z_0p !< The height at which the pressure is 0 [Z ~> m]
+  real,      optional, intent(in)  :: Bint !quadratic density interpolation number
+
 
 ! This subroutine calculates (by numerical quadrature) integrals of
 ! pressure anomalies across layers, which are required for calculating the
@@ -405,10 +407,12 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
   real :: dz_x(5,HI%iscB:HI%iecB) ! Layer thicknesses along an x-line of subgrid locations [Z ~> m]
   real :: dz_y(5,HI%isc:HI%iec)   ! Layer thicknesses along a y-line of subgrid locations [Z ~> m]
   real :: massWeightToggle          ! A non-dimensional toggle factor (0 or 1) [nondim]
+  real :: isWeightToggle            ! A non-dimensional toggle factor (0 or 1) [nondim]
   real :: Ttl, Tbl, Ttr, Tbr        ! Temperatures at the velocity cell corners [C ~> degC]
   real :: Stl, Sbl, Str, Sbr        ! Salinities at the velocity cell corners [S ~> ppt]
   real :: z0pres                    ! The height at which the pressure is zero [Z ~> m]
   real :: hWght                     ! A topographically limited thickness weight [Z ~> m]
+  real :: hWghtis                   ! An ice shelf limited thickness weight [Z ~> m]
   real :: hL, hR                    ! Thicknesses to the left and right [Z ~> m]
   real :: iDenom                    ! The denominator of the thickness weight expressions [Z-2 ~> m-2]
   logical :: use_rho_ref ! Pass rho_ref to the equation of state for more accurate calculation
@@ -426,8 +430,10 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
   I_Rho = 1.0 / rho_0
   z0pres = 0.0 ; if (present(Z_0p)) z0pres = Z_0p
   massWeightToggle = 0.
+  isWeightToggle = 0.
   if (present(useMassWghtInterp)) then
     if (useMassWghtInterp) massWeightToggle = 1.
+    if (useMassWghtInterp) isWeightToggle = 1.
   endif
   use_rho_ref = .true.
   if (present(use_inaccurate_form)) then
@@ -525,6 +531,20 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       ! this distance by the layer thickness to replicate other models.
       hWght = massWeightToggle * &
               max(0., -bathyT(i,j)-e(i+1,j,K), -bathyT(i+1,j)-e(i,j,K))
+              !max(0., e(i,j,K+1)-e(i+1,j,K), e(i+1,j,K+1)-e(i,j,K))
+      !if (K ==1) then
+      hWghtis = isWeightToggle * &
+              max(0., e(i+1,j,K)-e(i,j,1), e(i,j,K)-e(i+1,j,1))
+      !if ((e(i,j,1)-e(i,j,K)>1e-10) .and. (e(i+1,j,1)-e(i+1,j,K)>1e-10)) then
+      ! hWghtis = 0
+      !endif
+      !else
+      ! hWghtis = isWeightToggle * &
+              !max(0.,e(i+1,j,K)-p(i,j), e(i,k,K)-p(i+1,j))
+      !        max(0., e(i+1,j,K)-e(i,j,K-1), e(i,j,K)-e(i+1,j,K-1))
+      !endif
+      !print*,hWght2
+      hWght = max(hWght,hWghtis)
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
         hR = (e(i+1,j,K) - e(i+1,j,K+1)) + dz_subroundoff
@@ -552,12 +572,19 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
         ! the vertical profile while subscript (5) refers to the bottom
         ! value in the vertical profile.
         pos = i*15+(m-2)*5
+        if (present(Bint)) then
+         T15(pos+1) = w_left*Ttl + w_right*Ttr + (Ttr-Ttl)*w_right*(w_right-1)*Bint
+         T15(pos+5) = w_left*Tbl + w_right*Tbr + (Tbr-Tbl)*w_right*(w_right-1)*Bint
+
+         S15(pos+1) = w_left*Stl + w_right*Str + (Str-Stl)*w_right*(w_right-1)*Bint
+         S15(pos+5) = w_left*Sbl + w_right*Sbr + (Sbr-Sbl)*w_right*(w_right-1)*Bint
+        else
         T15(pos+1) = w_left*Ttl + w_right*Ttr
         T15(pos+5) = w_left*Tbl + w_right*Tbr
 
         S15(pos+1) = w_left*Stl + w_right*Str
         S15(pos+5) = w_left*Sbl + w_right*Sbr
-
+        endif
         p15(pos+1) = -GxRho*((w_left*e(i,j,K) + w_right*e(i+1,j,K)) - z0pres)
 
         ! Pressure
@@ -621,6 +648,9 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
     ! this distance by the layer thickness to replicate other models.
       hWght = massWeightToggle * &
               max(0., -bathyT(i,j)-e(i,j+1,K), -bathyT(i,j+1)-e(i,j,K))
+      hWghtis = isWeightToggle * &
+              max(0., e(i,j+1,K)-e(i,j,1), e(i,j,K)-e(i,j+1,1))
+      hWght = max(hWght,hWghtis)
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
         hR = (e(i,j+1,K) - e(i,j+1,K+1)) + dz_subroundoff
@@ -1562,6 +1592,7 @@ subroutine find_depth_of_pressure_in_cell(T_t, T_b, S_t, S_b, z_t, z_b, P_t, P_t
   real :: F_guess, F_l, F_r  ! Fractional positions [nondim]
   real :: GxRho ! The product of the gravitational acceleration and reference density [R L2 Z-1 T-2 ~> Pa m-1]
   real :: Pa, Pa_left, Pa_right, Pa_tol ! Pressure anomalies, P = integral of g*(rho-rho_ref) dz [R L2 T-2 ~> Pa]
+  integer :: m
   character(len=240) :: msg
 
   GxRho = G_e * rho_ref
@@ -1589,8 +1620,14 @@ subroutine find_depth_of_pressure_in_cell(T_t, T_b, S_t, S_b, z_t, z_b, P_t, P_t
 
   F_guess = F_l - Pa_left / (Pa_right - Pa_left) * (F_r - F_l)
   Pa = Pa_right - Pa_left ! To get into iterative loop
+  m = 0 !Reset a counter for the loop
   do while ( abs(Pa) > Pa_tol )
-
+    m = m + 1 ! Count the number of loops
+    !print*, 'm', m
+    if (m > 30) then
+     write(msg,*) Pa_left,Pa,Pa_right,P_t-P_tgt,P_b-P_tgt
+     call MOM_error(FATAL, 'find_depth_of_pressure_in_cell completes too many iterations: /n'//msg)
+    endif
     z_out = z_t + ( z_b - z_t ) * F_guess
     Pa = frac_dp_at_pos(T_t, T_b, S_t, S_b, z_t, z_b, rho_ref, G_e, F_guess, EOS) - ( P_tgt - P_t )
 

@@ -157,7 +157,7 @@ subroutine buildGridFromH(nz, h, x)
 end subroutine buildGridFromH
 
 !> Remaps column of values u0 on grid h0 to grid h1 assuming the top edge is aligned.
-subroutine remapping_core_h(CS, n0, h0, u0, n1, h1, u1, h_neglect, h_neglect_edge, PCM_cell)
+subroutine remapping_core_h(CS, n0, h0, u0, n1, h1, u1, h_neglect, h_neglect_edge, PCM_cell, debug)
   type(remapping_CS),  intent(in)  :: CS !< Remapping control structure
   integer,             intent(in)  :: n0 !< Number of cells on source grid
   real, dimension(n0), intent(in)  :: h0 !< Cell widths on source grid [H]
@@ -173,6 +173,7 @@ subroutine remapping_core_h(CS, n0, h0, u0, n1, h1, u1, h_neglect, h_neglect_edg
                                          !! calculations in the same units as h0 [H]
   logical, dimension(n0), optional, intent(in) :: PCM_cell !< If present, use PCM remapping for
                                          !! cells in the source grid where this is true.
+  logical, optional, intent(in) :: debug
 
   ! Local variables
   real, dimension(n0,2)           :: ppoly_r_E     ! Edge value of polynomial [A]
@@ -182,9 +183,13 @@ subroutine remapping_core_h(CS, n0, h0, u0, n1, h1, u1, h_neglect, h_neglect_edg
   real :: hNeglect, hNeglect_edge ! Negligibly small cell widths in the same units as h0 [H]
   integer :: iMethod   ! An integer indicating the integration method used
   integer :: k
+  logical :: ddebug
 
   hNeglect = 1.0e-30 ; if (present(h_neglect)) hNeglect = h_neglect
   hNeglect_edge = 1.0e-10 ; if (present(h_neglect_edge)) hNeglect_edge = h_neglect_edge
+
+  ddebug = .false.
+  if (present(debug)) ddebug = debug
 
   call build_reconstructions_1d( CS, n0, h0, u0, ppoly_r_coefs, ppoly_r_E, ppoly_r_S, iMethod, &
                                hNeglect, hNeglect_edge, PCM_cell )
@@ -194,6 +199,14 @@ subroutine remapping_core_h(CS, n0, h0, u0, n1, h1, u1, h_neglect, h_neglect_edg
 
   call remap_via_sub_cells( n0, h0, u0, ppoly_r_E, ppoly_r_coefs, n1, h1, iMethod, &
                           CS%force_bounds_in_subcell, u1, uh_err )
+if (ddebug) then
+print*,'CS',CS%remapping_scheme,CS%degree,CS%boundary_extrapolation,CS%force_bounds_in_subcell,CS%answer_date,iMethod
+do k=1,n0
+print*,k,h0(k),u0(k),ppoly_r_E(k,1),ppoly_r_E(k,2)
+print*,'                   ',ppoly_r_coefs(k,1),ppoly_r_coefs(k,2)
+print*,' h1',h1(k),u1(k)
+enddo
+endif
 
   if (CS%check_remapping) call check_remapped_values(n0, h0, u0, ppoly_r_E, CS%degree, ppoly_r_coefs, &
                                                      n1, h1, u1, iMethod, uh_err, "remapping_core_h")
@@ -656,7 +669,8 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
   uh_sub(1) = 0.
   u_sub(1) = ppoly0_E(1,1)
   u02_err = 0.
-  do i_sub = 2, n0+n1
+! do i_sub = 2, n0+n1
+  do i_sub = 2, n0+n1+1
 
     ! Sub-cell thickness from loop above
     dh = h_sub(i_sub)
@@ -669,7 +683,8 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
     ! positions with source cell from xa to xb  (0 <= xa <= xb <= 1).
     dh0_eff = dh0_eff + dh ! Cumulative thickness within the source cell
     if (h0_eff(i0)>0.) then
-      xb = dh0_eff / h0_eff(i0) ! This expression yields xa <= xb <= 1.0
+!     xb = dh0_eff / h0_eff(i0) ! This expression yields xa <= xb <= 1.0
+      xb = dh0_eff / h0(i0) ! This expression yields xa <= xb <= 1.0
       xb = min(1., xb) ! This is only needed when the total target column is wider than the source column
       u_sub(i_sub) = average_value_ppoly( n0, u0, ppoly0_E, ppoly0_coefs, method, i0, xa, xb)
     else ! Vanished cell
@@ -700,17 +715,19 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
     endif
     uh_sub(i_sub) = dh * u_sub(i_sub)
 
-    if (isub_src(i_sub+1) /= i0) then
-      ! If the next sub-cell is in a different source cell, reset the position counters
-      dh0_eff = 0.
-      xa = 0.
-    else
-      xa = xb ! Next integral will start at end of last
+    if (i_sub <= n0+n1) then
+      if (isub_src(i_sub+1) /= i0) then
+        ! If the next sub-cell is in a different source cell, reset the position counters
+        dh0_eff = 0.
+        xa = 0.
+      else
+        xa = xb ! Next integral will start at end of last
+      endif
     endif
 
   enddo
-  u_sub(n0+n1+1) = ppoly0_E(n0,2)                   ! This value is only needed when total target column
-  uh_sub(n0+n1+1) = ppoly0_E(n0,2) * h_sub(n0+n1+1) ! is wider than the source column
+! u_sub(n0+n1+1) = ppoly0_E(n0,2)                   ! This value is only needed when total target column
+! uh_sub(n0+n1+1) = ppoly0_E(n0,2) * h_sub(n0+n1+1) ! is wider than the source column
 
   if (adjust_thickest_subcell) then
     ! Loop over each source cell substituting the integral/average for the thickest sub-cell (within
