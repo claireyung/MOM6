@@ -324,7 +324,7 @@ subroutine ALE_set_extrap_boundaries( param_file, CS)
                  "If true, values at the interfaces of boundary cells are "//&
                  "extrapolated instead of piecewise constant", default=.false.)
   call remapping_set_param(CS%remapCS, boundary_extrapolation=remap_boundary_extrap)
-end subroutine ALE_set_extrap_boundaries 
+end subroutine ALE_set_extrap_boundaries
 
 !> Initialize diagnostics for the ALE module.
 subroutine ALE_register_diags(Time, G, GV, US, diag, CS)
