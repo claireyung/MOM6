@@ -534,7 +534,7 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
               !max(0., e(i,j,K+1)-e(i+1,j,K), e(i+1,j,K+1)-e(i,j,K))
       !if (K ==1) then
       hWghtis = isWeightToggle * &
-              max(0., e(i+1,j,K)-e(i,j,1), e(i,j,K)-e(i+1,j,1))
+              max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1))
       !if ((e(i,j,1)-e(i,j,K)>1e-10) .and. (e(i+1,j,1)-e(i+1,j,K)>1e-10)) then
       ! hWghtis = 0
       !endif
@@ -649,7 +649,7 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       hWght = massWeightToggle * &
               max(0., -bathyT(i,j)-e(i,j+1,K), -bathyT(i,j+1)-e(i,j,K))
       hWghtis = isWeightToggle * &
-              max(0., e(i,j+1,K)-e(i,j,1), e(i,j,K)-e(i,j+1,1))
+              max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1))
       hWght = max(hWght,hWghtis)
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff

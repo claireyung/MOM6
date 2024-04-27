@@ -510,17 +510,28 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     intx_pa, &  ! The zonal integral of the pressure anomaly along the interface
                 ! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
+    intx_pa_k, &
     intx_dpa, &    ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
 !    rho_top, &
     correction, &
     intxpa_reset
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
+    intx_dpa_3D, & ! The zonal integral of the pressure anomaly along the interface
+                ! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
+    intx_pa_3D
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    inty_dpa_3D, & ! 
+    inty_pa_3D
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
+    pa_3D, &
+    intz_dpa_3D
+
   real, dimension(SZI_(G),SZJB_(G)) :: &
     inty_pa, &  ! The meridional integral of the pressure anomaly along the
                 ! interface atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
     inty_dpa, &    ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
     correctiony, &
     intypa_reset
-
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
     T_tmp, &    ! Temporary array of temperatures where layers that are lighter
                 ! than the mixed layer have the mixed layer's properties [C ~> degC].
@@ -923,18 +934,22 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
         if ( CS%Recon_Scheme == 1 ) then
          B = 0.0
-         if (nPFuloop == 1) then
-          B = 1.0
-         elseif (nPFuloop == 2) then
-          B = -1.0
-         else
-          B = 0.0
-         endif
+         !if (nPFuloop == 1) then
+         ! B = 1.0
+         !elseif (nPFuloop == 2) then
+         ! B = -1.0
+         !else
+         ! B = 0.0
+         !endif
           call int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa, intz_dpa, intx_dpa, inty_dpa, &
                     useMassWghtInterp=CS%useMassWghtInterp, &
                     use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=G%Z_ref,Bint=B)
+          intz_dpa_3D(:,:,k) = intz_dpa
+          intx_dpa_3D(:,:,k) = intx_dpa
+          inty_dpa_3D(:,:,k) = inty_dpa
+          !intx_pa_3D(:,:,k) = intx_pa
           !if ((k==19) .or. (k==20)) then
            !print*, 'k=',k,' ,dpa',dpa(26,4)
            !print*, 'intz_dpal',intz_dpa(26,4)
@@ -1167,20 +1182,117 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       inty_pa(i,J) = inty_pa(i,J) + inty_dpa(i,J)
     enddo ; enddo
     !$OMP parallel do default(shared)
+    pa_3D(:,:,k) = pa
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       pa(i,j) = pa(i,j) + dpa(i,j)
     enddo ; enddo
   enddo
-       if (nPFuloop == 1) then
-        call export_real_array_3d('PFuB1.nc',PFu,'PFu')
-        PFupB = PFu
-       elseif (nPFuloop == 2) then
-        call export_real_array_3d('PFuB-1.nc',PFu,'PFu')
-        PFumB = PFu
-       else
-        call export_real_array_3d('PFuB0.nc',PFu,'PFu')
-        PFu0 = PFu
-       endif
+  ! having stored the pressure gradients, we can work out where the first nonvanished layers is
+  ! reset intxpa there
+  ! adjust intxpa above and below, and then recalculate PFu/PFv
+
+   do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    !print*, 'i', i
+    kloop: do k=1,nz-1
+    !Check if both sides are nonvanished and MWIPG is not activated
+    if ((h(i,j,k)>1.e-6).and.(h(i+1,j,k)>1.e-6)) then
+     if (.not. (max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1)) > 1.e-8)) then
+     !print*,k, e(i,j,k), e(i+1,j,k), e(i,j,k+1), e(i+1,j,k+1)
+     !calculate pressure at the bottom of this cell (pa are known)
+     ! then we have a "good estimate" for intxpa (it might have quadratic pressure dependence if sloped)
+     !intx_pa_k(i,j) = 0.5*(pa_3D(i,j,k+1) + pa_3D(i+1,j,k+1))
+     !intx_pa_k(i,j) = 0.5*(pa_3D(i,j,k+1) + pa_3D(i+1,j,k+1)) 
+     ! now we recalculate intx_pa and PFu at each level working up and then down
+     !intx_pa_3D(i,j,k+1) = intx_pa_k(i,j)
+     call calculate_density(T_t(I,j,k+1), S_t(I,j,k+1), pa_3D(i,j,k+1), rho_tl, &   
+                                 tv%eqn_of_state, rho_ref=rho_ref) 
+     call calculate_density(T_t(I+1,j,k+1), S_t(I+1,j,k+1), pa_3D(i+1,j,k+1), rho_tr, & 
+                                 tv%eqn_of_state, rho_ref = rho_ref)             
+     correction(I,j) = (rho_tr-rho_tl)*GV%g_Earth/12*(e(i+1,j,k+1)-e(i,j,k+1)) 
+     intx_pa_k(I,j) = 0.5*(pa_3D(i,j,k+1) + pa_3D(i+1,j,k+1)) + correction(I,j) 
+     intx_pa_3D(i,j,k+1) = intx_pa_k(i,j)
+     do k2=1,k
+      !print*,k-k2+1
+      intx_pa_3D(i,j,k-k2+1) = intx_pa_3D(i,j,(k-k2+2)) - intx_dpa_3D(i,j,k-k2+1)
+     enddo
+     do k2=k+2,nz
+      !print*, k2
+      intx_pa_3D(i,j,k2) = intx_pa_3D(i,j,k2-1) + intx_dpa_3D(i,j,k2-1)
+     enddo
+      ! Now with fixed pressures, calculate PFu everywhere      
+     do k2=1,nz
+      PFu(I,j,k2) = (((pa_3D(i,j,k2)*h(i,j,k2) + intz_dpa_3D(i,j,k2)) - &
+                   (pa_3D(i+1,j,k2)*h(i+1,j,k2) + intz_dpa_3D(i+1,j,k2))) + &
+                   ((h(i+1,j,k2) - h(i,j,k2)) * intx_pa_3D(I,j,k2) - &
+                   (e(i+1,j,k2+1) - e(i,j,k2+1)) * intx_dpa_3D(I,j,k2) * GV%Z_to_H)) * &
+                   ((2.0*I_Rho0*G%IdxCu(I,j)) / &
+                   ((h(i,j,k2) + h(i+1,j,k2)) + h_neglect))
+     !if (((k2==9).or.(k2==10)).and.(i==24).and.(j==4)) then
+     ! print*, 'pal', pa_3D(i,j,k2)
+     ! print*, 'par', pa_3D(i+1,j,k2)
+     ! print*, 'hl', h(i,j,k2)
+     ! print*, 'hr', h(i+1,j,k2)
+     ! print*, 'intz_dpa_l',intz_dpa_3D(i,j,k2)
+     ! print*, 'intz_dpa_r',intz_dpa_3D(i+1,j,k2)
+     ! print*, 'intxpa',intx_pa_3D(I,j,k2)
+     ! print*, 'intx_dpa', intx_dpa_3D(I,j,k2)
+     ! print*, 'e_tl,e_tr,e_bl,e_br',e(i,j,k2),e(i+1,j,k2),e(i,j,k2+1),e(i+1,j,k2+1)
+     ! print*, 'PFu',PFu(i,j,k2)
+     !endif
+     enddo
+     exit kloop
+    endif; endif
+   enddo kloop; enddo
+  enddo
+
+   do J=Jsq,Jeq+1 ; do i=is,ie+1 !j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    !print*, 'i', i
+    kloop2: do k=1,nz-1
+    !Check if both sides are nonvanished and MWIPG is not activated
+    if ((h(i,j,k)>1.e-6).and.(h(i,j+1,k)>1.e-6)) then
+     if (.not. (max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1)) > 1.e-8)) then
+     !calculate pressure at the bottom of this cell (pa are known)
+     ! then we have a "good estimate" for intxpa (it might have quadratic pressure dependence if sloped)
+     ! now we recalculate intx_pa and PFu at each level working up and then down
+     call calculate_density(T_t(I,j,k+1), S_t(I,j,k+1), pa_3D(i,j,k+1), rho_tl, &
+                                 tv%eqn_of_state, rho_ref=rho_ref)
+     call calculate_density(T_t(I,j+1,k+1), S_t(I,j+1,k+1), pa_3D(i,j+1,k+1), rho_tr, &
+                                 tv%eqn_of_state, rho_ref = rho_ref)
+     correction(I,j) = (rho_tr-rho_tl)*GV%g_Earth/12*(e(i,j+1,k+1)-e(i,j,k+1))
+     inty_pa_3D(i,j,k+1) = 0.5*(pa_3D(i,j,k+1) + pa_3D(i,j+1,k+1)) + correction(I,j) 
+     do k2=1,k
+      !print*,k-k2+1
+      inty_pa_3D(i,j,k-k2+1) = inty_pa_3D(i,j,(k-k2+2)) - inty_dpa_3D(i,j,k-k2+1)
+     enddo
+     do k2=k+2,nz
+      !print*, k2
+      inty_pa_3D(i,j,k2) = inty_pa_3D(i,j,k2-1) + inty_dpa_3D(i,j,k2-1)
+     enddo
+      ! Now with fixed pressures, calculate PFu everywhere      
+     do k2=1,nz
+      PFv(I,j,k2) = (((pa_3D(i,j,k2)*h(i,j,k2) + intz_dpa_3D(i,j,k2)) - &
+                   (pa_3D(i,j+1,k2)*h(i,j+1,k2) + intz_dpa_3D(i,j+1,k2))) + &
+                   ((h(i,j+1,k2) - h(i,j,k2)) * inty_pa_3D(I,j,k2) - &
+                   (e(i,j+1,k2+1) - e(i,j,k2+1)) * inty_dpa_3D(I,j,k2) * GV%Z_to_H)) * &
+                   ((2.0*I_Rho0*G%IdyCv(I,j)) / &
+                   ((h(i,j,k2) + h(i,j+1,k2)) + h_neglect))
+      enddo
+     exit kloop2
+    endif; endif
+   enddo kloop2; enddo
+  enddo
+
+
+       !if (nPFuloop == 1) then
+       ! call export_real_array_3d('PFuB1.nc',PFu,'PFu')
+       ! PFupB = PFu
+       !elseif (nPFuloop == 2) then
+       ! call export_real_array_3d('PFuB-1.nc',PFu,'PFu')
+       ! PFumB = PFu
+       !else
+       ! call export_real_array_3d('PFuB0.nc',PFu,'PFu')
+       ! PFu0 = PFu
+       !endif
   call export_real_array_3d('S_t.nc',S_t,'S_t')
   call export_real_array_3d('S_b.nc',S_b,'S_b')
   !call export_real_array_3d('PFu.nc',PFu,'PFu')
@@ -1193,29 +1305,29 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   !print*,'PFu 1', PFu(17,4,1),PFu(18,4,1), PFu(19,4,1)
   !print*,'PFu 2', PFu(17,4,2),PFu(18,4,2), PFu(19,4,2)
   enddo !nPFuloop
-  if (CS%PF_bounded_no_shear) then
-   do j=js,je ; do I=Isq,Ieq
-   k_gc = 1
-   do k=1,nz
-    if ((h(I,j,k)>1.e-6).and.(h(I,j+1,k)>1.e-6)) then
-     k_gc = k
-     exit
-    endif
-   enddo !k
-   if (k_gc < nz) then !Claire - this is for topo NOT ice shelf
-    do k2=(k_gc+1),nz
-     if (((PFumB(I,j,k2)<PFu0(I,j,k2)).and.(PFupB(I,j,k2)>PFu0(I,j,k2))) &
-        .or.((PFumB(I,j,k2)>PFu0(I,j,k2)).and.(PFupB(I,j,k2)<PFu0(I,j,k2)))) then
-      !Bounded, set PFu to be equal to cell above (scaled for different h)
-      print*,'Bounded, i,j,k2',i,j,k2
-      PFu(i,j,k2) = PFu0(i,j,k2-1)*((h(i,j,k2-1) + h(i+1,j,k2-1)) + h_neglect)/((h(i,j,k2) + h(i+1,j,k2)) + h_neglect)
-     else !Not bounded, there is a real flow
-      PFu(i,j,k2) = PFu0(i,j,k2) 
-     endif
-    enddo 
-   endif    
-   enddo; enddo !i,j
-  endif
+  !if (CS%PF_bounded_no_shear) then
+  ! do j=js,je ; do I=Isq,Ieq
+  ! k_gc = 1
+  ! do k=1,nz
+  !  if ((h(I,j,k)>1.e-6).and.(h(I,j+1,k)>1.e-6)) then
+  !   k_gc = k
+  !   exit
+  !  endif
+  ! enddo !k
+  ! if (k_gc < nz) then !Claire - this is for topo NOT ice shelf
+  !  do k2=(k_gc+1),nz
+  !   if (((PFumB(I,j,k2)<PFu0(I,j,k2)).and.(PFupB(I,j,k2)>PFu0(I,j,k2))) &
+  !      .or.((PFumB(I,j,k2)>PFu0(I,j,k2)).and.(PFupB(I,j,k2)<PFu0(I,j,k2)))) then
+  !    !Bounded, set PFu to be equal to cell above (scaled for different h)
+  !    print*,'Bounded, i,j,k2',i,j,k2
+  !    PFu(i,j,k2) = PFu0(i,j,k2-1)*((h(i,j,k2-1) + h(i+1,j,k2-1)) + h_neglect)/((h(i,j,k2) + h(i+1,j,k2)) + h_neglect)
+  !   else !Not bounded, there is a real flow
+  !    PFu(i,j,k2) = PFu0(i,j,k2) 
+  !   endif
+  !  enddo 
+  ! endif    
+  ! enddo; enddo !i,j
+  !endif
 !PFupB, PFumB 
   if (CS%GFS_scale < 1.0) then
     do k=1,nz
