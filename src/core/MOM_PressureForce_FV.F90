@@ -49,6 +49,7 @@ type, public :: PressureForce_FV_CS ; private
   logical :: useMassWghtInterp !< Use mass weighting in T/S interpolation
   logical :: useMassWghtInterpis !< Use mass weighting in T/S interpolation for top boundary
   logical :: correction_intxpa ! Use correction to surface intxpa
+  logical :: correction_intxpa_5pt ! Use 5 point quadrature to calculate surface intxpa
   logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
                             !! method to calculate density anomalies, as used prior to
                             !! March 2018.
@@ -552,7 +553,12 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
-  integer :: i, j, k
+  integer :: i, j, k, m
+  real :: T5(5), S5(5) ! Temperatures and salinities at five quadrature points [C ~> degC] and [S ~> ppt]
+  real :: p5(5),p5r(5),p5l(5)      ! Pressures at five quadrature points [R L2 T-2 ~> Pa]
+  real :: r5(5)      ! Densities at five quadrature points [R ~> kg m-3]
+  real, parameter :: C1_90 = 1.0/90.0  ! A rational constant [nondim]
+  real :: wt_R !A weighting
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
@@ -754,7 +760,38 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       ! pressure difference is at least half the size of the difference expected by hydrostatic balance
       ! this gets rid of pressure differences that are small e.g. open ocean
       if (((pa(i+1,j)-pa(i,j))*(-e(i+1,j,1)+e(i,j,1)))<0.0) then !!! pressre/depth relationship has a positive density
-       correction_x(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+       if (CS%correction_intxpa_5pt) then
+        !! USE 5 PT QUADRATURE METHOD TO CALCULATE INTXPA !!
+        T5(1)=T_t(I,j,1) ; T5(5)=T_t(I+1,j,1)
+        S5(1)=S_t(I,j,1) ; S5(5)=S_t(I+1,j,1)
+        ! Pressure input to density EOS should be real pressure not rho_ref, I think
+        p5(1)=pa(I,j)-(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+        p5(5)=pa(I+1,j)-(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+        do m=2,4
+         wt_R =  0.25*real(m-1)
+         T5(m) = T5(1)+(T5(5)-T5(1))*wt_R !Quadratic: + (T5(5)-T5(1))*B*wt_R*(wt_R-1);
+         S5(m) = S5(1)+(S5(5)-S5(1))*wt_R !+ (S5(5)-S5(1))*B*wt_R*(wt_R-1);
+         p5(m) = p5(1)+(p5(5)-p5(1))*wt_R
+        enddo !m
+        call calculate_density(T5, S5, p5, r5, tv%eqn_of_state, rho_ref=rho_ref)
+        ! add rhoref back in
+        do m=1,5
+         p5(m) = p5(m) +(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+        enddo
+        do m=2,4
+         ! Make pressure curvature a difference from the linear fit of pressure between the two points
+         ! Do this by integrating pressure between each of the 5 points and adding up
+         ! This way integration direction doesn't matter when adding up pressure from previous point
+         p5(m) = p5(m-1)+((p5(5)-p5(1))/4.+1./4.*(r5(5)+r5(1))*GV%g_Earth*(e(I+1,j,1)-e(I,j,1))/2. - &
+               ((r5(m)+r5(m-1))*GV%g_Earth*0.25*(e(I+1,j,1)-e(I,j,1))/2.))
+        enddo
+        intx_pa(I,j) = C1_90*(7.0*(p5(1)+p5(5)) + 32.0*(p5(2)+p5(4)) + 12.0*p5(3))
+        ! Get correction from difference between this and linear average. This is clunky and repetitive.
+        correction_x(I,j) = -0.5*(pa(i,j) + pa(i+1,j)) + intx_pa(I,j)
+        !! END OF 5 PT QUADRATURE BLOCK
+       else !! Assume linear fit of densities between densities of top surface !!
+        correction_x(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+       endif
       else ! pressure difference and depth difference opposite in sign to hydrostatic pressure change
        correction_x(I,j) = 0.0      
       endif
@@ -773,7 +810,38 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       ! pressure difference is at least half the size of the difference expected by hydrostatic balance
       ! this gets rid of pressure differences that are small e.g. open ocean
       if (((pa(i,j+1)-pa(i,j))*(-e(i,j+1,1)+e(i,j,1)))<0.0) then !!! pressre/depth relationship has a positive density
-       correction_y(i,J) = (rho_top(i,J+1)-rho_top(i,J))*GV%g_Earth/12*(e(i,j+1,1)-e(i,j,1))
+       if (CS%correction_intxpa_5pt) then
+        !! USE 5 PT QUADRATURE METHOD TO CALCULATE INTXPA !!
+        T5(1)=T_t(I,j,1) ; T5(5)=T_t(i,j+1,1)
+        S5(1)=S_t(I,j,1) ; S5(5)=S_t(i,j+1,1)
+        ! Pressure input to density EOS should be real pressure not rho_ref, I think
+        p5(1)=pa(i,j)-(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+        p5(5)=pa(i,j+1)-(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+        do m=2,4
+         wt_R =  0.25*real(m-1)
+         T5(m) = T5(1)+(T5(5)-T5(1))*wt_R !Quadratic: + (T5(5)-T5(1))*B*wt_R*(wt_R-1);
+         S5(m) = S5(1)+(S5(5)-S5(1))*wt_R !+ (S5(5)-S5(1))*B*wt_R*(wt_R-1);
+         p5(m) = p5(1)+(p5(5)-p5(1))*wt_R
+        enddo !m
+        call calculate_density(T5, S5, p5, r5, tv%eqn_of_state, rho_ref=rho_ref)
+        ! add rhoref back in
+        do m=1,5
+         p5(m) = p5(m) +(rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
+        enddo
+        do m=2,4
+         ! Make pressure curvature a difference from the linear fit of pressure between the two points
+         ! Do this by integrating pressure between each of the 5 points and adding up
+         ! This way integration direction doesn't matter when adding up pressure from previous point
+         p5(m) = p5(m-1)+((p5(5)-p5(1))/4.+1./4.*(r5(5)+r5(1))*GV%g_Earth*(e(i,j+1,1)-e(i,j,1))/2. - &
+               ((r5(m)+r5(m-1))*GV%g_Earth*0.25*(e(i,j+1,1)-e(I,j,1))/2.))
+        enddo
+        inty_pa(I,j) = C1_90*(7.0*(p5(1)+p5(5)) + 32.0*(p5(2)+p5(4)) + 12.0*p5(3))
+        ! Get correction from difference between this and linear average. This is clunky and repetitive.
+        correction_y(I,j) = -0.5*(pa(i,j) + pa(i,j+1)) + inty_pa(I,j)
+        !! END OF 5 PT QUADRATURE BLOCK
+       else !! Assume linear fit of densities between densities of top surface !!
+        correction_y(i,J) = (rho_top(i,J+1)-rho_top(i,J))*GV%g_Earth/12*(e(i,j+1,1)-e(i,j,1))
+       endif
       else ! pressure difference and depth difference opposite in sign to hydrostatic pressure change
        correction_y(i,J) = 0.0
       endif
@@ -1027,6 +1095,9 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
   call get_param(param_file, mdl, "CORRECTION_INTXPA",CS%correction_intxpa, &
                  "If true, use a correction for surface pressure curvature in intx_pa.", &
                  default = .false.)
+  call get_param(param_file, mdl, "CORRECTION_INTXPA_5PT",CS%correction_intxpa_5pt, &
+                 "If true, use 5point quadrature to calculate intxpa. This requires "//&
+                 "CORRECTION_INTXPA = True.",default = .false.)
   call get_param(param_file, mdl, "USE_INACCURATE_PGF_RHO_ANOM", CS%use_inaccurate_pgf_rho_anom, &
                  "If true, use a form of the PGF that uses the reference density "//&
                  "in an inaccurate way. This is not recommended.", default=.false.)
