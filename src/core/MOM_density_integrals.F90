@@ -312,7 +312,7 @@ end subroutine int_density_dz_generic_pcm
 !! T and S are linear profiles.
 subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
                                       rho_0, G_e, dz_subroundoff, bathyT, HI, GV, EOS, US, use_stanley_eos, dpa, &
-                                      intz_dpa, intx_dpa, inty_dpa, useMassWghtInterp, &
+                                      intz_dpa, intx_dpa, inty_dpa, useMassWghtInterp, useMassWghtInterpis, &
                                       use_inaccurate_form, Z_0p, Bint)
   integer,              intent(in)  :: k   !< Layer index to calculate integrals for
   type(hor_index_type), intent(in)  :: HI  !< Ocean horizontal index structures for the input arrays
@@ -354,7 +354,9 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
                                            !! pressure anomaly at the top and bottom of the layer
                                            !! divided by the y grid spacing [R L2 T-2 ~> Pa]
   logical,    optional, intent(in)  :: useMassWghtInterp !< If true, uses mass weighting to
-                                           !! interpolate T/S for top and bottom integrals.
+                                           !! interpolate T/S for bottom integrals.
+  logical,    optional, intent(in)  :: useMassWghtInterpis !< If true, uses mass weighting to
+                                           !! interpolate T/S for top integrals.
   logical,    optional, intent(in)  :: use_inaccurate_form !< If true, uses an inaccurate form of
                                            !! density anomalies, as was used prior to March 2018.
   real,       optional, intent(in)  :: Z_0p !< The height at which the pressure is 0 [Z ~> m]
@@ -433,7 +435,9 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
   isWeightToggle = 0.
   if (present(useMassWghtInterp)) then
     if (useMassWghtInterp) massWeightToggle = 1.
-    if (useMassWghtInterp) isWeightToggle = 1.
+  endif
+  if (present(useMassWghtInterpis)) then
+    if (useMassWghtInterpis) isWeightToggle = 1.
   endif
   use_rho_ref = .true.
   if (present(use_inaccurate_form)) then
@@ -533,8 +537,15 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
               max(0., -bathyT(i,j)-e(i+1,j,K), -bathyT(i+1,j)-e(i,j,K))
               !max(0., e(i,j,K+1)-e(i+1,j,K), e(i+1,j,K+1)-e(i,j,K))
       !if (K ==1) then
+      ! SOMETHING ALONG THE LINES OF if (pa(i+1,k+1)<pa(i,1)) or (pa(i+1,1) <pa(i,k+1)) then...
+      ! but pressures are not passed through to this submodule
+      ! and might the rho-ref affect this calculation? 
+      !if ((tv%p(i+1,k+1)<tv%p(i,1)).or.(tv%p(i+1,k+1)<tv%p(i,1))) then
       hWghtis = isWeightToggle * &
               max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1))
+      !else
+      ! hWghtis = 0.
+      !endif
       !if ((e(i,j,1)-e(i,j,K)>1e-10) .and. (e(i+1,j,1)-e(i+1,j,K)>1e-10)) then
       ! hWghtis = 0
       !endif

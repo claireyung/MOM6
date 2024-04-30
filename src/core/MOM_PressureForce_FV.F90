@@ -50,10 +50,12 @@ type, public :: PressureForce_FV_CS ; private
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                             !! timing of diagnostic output.
   logical :: useMassWghtInterp !< Use mass weighting in T/S interpolation
+  logical :: useMassWghtInterpis
   logical :: correction_intxpa, &
              correction_intxpa_5pt, &
              reset_intxpa_integral, &
-             PF_bounded_no_shear
+             PF_bounded_no_shear, &
+             reset_intxpa_integral2
   logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
                             !! method to calculate density anomalies, as used prior to
                             !! March 2018.
@@ -850,7 +852,21 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   !print*,rho_top
    do j=js,je ; do I=Isq,Ieq
     if (CS%correction_intxpa) then
-     correction(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+     if (abs(pa(i+1,j) - pa(i,j)) > abs((rho_top(I+1,j)+rho_top(I,j)-2.0*rho_ref)/4.0*(-e(i+1,j,1)+e(i,j,1))*GV%g_Earth)) then
+      print*,'pa(i+1,j) - pa(i,j)',pa(i+1,j) - pa(i,j)
+      print*,'(rho_top(I+1,j)+rho_top(I,j))/2.0*(-e(i+1,j,1)+e(i,j,1))*GV%g_Earth)',(rho_top(I+1,j)+rho_top(I,j)-2*rho_ref)/2.0*(-e(i+1,j,1)+e(i,j,1))*GV%g_Earth
+      print*, '-e(i+1,j,1)+e(i,j,1)',-e(i+1,j,1)+e(i,j,1)
+      if (((pa(i+1,j)-pa(i,j))*(-e(i+1,j,1)+e(i,j,1)))<0.0) then !!! CLAIRE -- add NOT density inversion criteria
+     ! print*,'hi'
+     ! print*,'pa(i+1,j) - pa(i,j)',pa(i+1,j) - pa(i,j)
+     ! print*,'(rho_top(I+1,j)+rho_top(I,j))/2.0*(-e(i+1,j,1)+e(i,j,1))*GV%g_Earth)',(rho_top(I+1,j)+rho_top(I,j)-2*rho_ref)/2.0*(-e(i+1,j,1)+e(i,j,1))*GV%g_Earth
+      correction(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+      else
+       correction(I,j) = 0.0      
+      endif
+     else !pressure difference too small to be explained by hydrostatic pressure change
+      correction(I,j) = 0.0
+     endif
      !correction(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))/2
      !correction(I,j) = min(0.,-(rho_top(I+1,j)-rho_top(I,j))*(pa(i+1,j)-pa(i,j))/12 * &
      !                   2/(rho_top(I+1,j)+rho_top(I,j)-2*rho_ref))
@@ -944,7 +960,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
           call int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa, intz_dpa, intx_dpa, inty_dpa, &
-                    useMassWghtInterp=CS%useMassWghtInterp, &
+                    useMassWghtInterp=CS%useMassWghtInterp, useMassWghtInterpis = CS%useMassWghtInterpis, &
                     use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=G%Z_ref,Bint=B)
           intz_dpa_3D(:,:,k) = intz_dpa
           intx_dpa_3D(:,:,k) = intx_dpa
@@ -1190,7 +1206,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   ! having stored the pressure gradients, we can work out where the first nonvanished layers is
   ! reset intxpa there
   ! adjust intxpa above and below, and then recalculate PFu/PFv
-
+  if (CS%reset_intxpa_integral2) then
    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
     !print*, 'i', i
     kloop: do k=1,nz-1
@@ -1281,7 +1297,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     endif; endif
    enddo kloop2; enddo
   enddo
-
+  endif ! do correction
 
        !if (nPFuloop == 1) then
        ! call export_real_array_3d('PFuB1.nc',PFu,'PFu')
@@ -1486,7 +1502,11 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
   call get_param(param_file, mdl, "MASS_WEIGHT_IN_PRESSURE_GRADIENT", CS%useMassWghtInterp, &
                  "If true, use mass weighting when interpolating T/S for "//&
                  "integrals near the bathymetry in FV pressure gradient "//&
-                 "calculations.", default=.false.)
+                 "calculations.", default=.false.) 
+  call get_param(param_file, mdl, "MASS_WEIGHT_IN_PRESSURE_GRADIENT_IS", CS%useMassWghtInterpis, &
+                 "If true, use mass weighting when interpolating T/S for "//&
+                 "integrals near the top in FV pressure gradient calculations. "//&
+                 "Defaults to MASS_WEIGHT_IN_PRESSURE_GRADIENT.", default=CS%useMassWghtInterp)
   call get_param(param_file, mdl, "CORRECTION_INTXPA",CS%correction_intxpa, &
                  "If true, use a correction for intxpa needed for ice shelves", &
                  default = .false.)
@@ -1494,6 +1514,9 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
                  "If true, use 5point quadrature to calculate intxpa", &
                  default = .false.)
   call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL",CS%reset_intxpa_integral, &
+                 "If true, reset INTXPA to match pressures at first nonvanished cell", &
+                 default = .false.)
+  call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL_2",CS%reset_intxpa_integral2, &
                  "If true, reset INTXPA to match pressures at first nonvanished cell", &
                  default = .false.)
   call get_param(param_file, mdl, "CORRECT_PF_IF_BOUNDED_NO_SHEAR",CS%PF_bounded_no_shear, &
