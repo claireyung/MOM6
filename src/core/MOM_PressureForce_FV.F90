@@ -50,6 +50,7 @@ type, public :: PressureForce_FV_CS ; private
   logical :: useMassWghtInterpis !< Use mass weighting in T/S interpolation for top boundary
   logical :: correction_intxpa ! Use correction to surface intxpa
   logical :: correction_intxpa_5pt ! Use 5 point quadrature to calculate surface intxpa
+  logical :: reset_intxpa_integral   !In the interior, reset intxpa at a trusted cell (for ice shelf)
   logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
                             !! method to calculate density anomalies, as used prior to
                             !! March 2018.
@@ -515,6 +516,18 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     inty_dpa, & ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
     correction_y! Correction for curvature in inty_pa
 
+ ! 3D copies of 2D data
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
+    intx_dpa_3D, & ! The zonal integral of the pressure anomaly along the interface
+                ! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
+    intx_pa_3D
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    inty_dpa_3D, & ! 
+    inty_pa_3D
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
+    pa_3D, &
+    intz_dpa_3D
+
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
     T_tmp, &    ! Temporary array of temperatures where layers that are lighter
                 ! than the mixed layer have the mixed layer's properties [C ~> degC].
@@ -553,12 +566,13 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
-  integer :: i, j, k, m
+  integer :: i, j, k, m, k2
   real :: T5(5), S5(5) ! Temperatures and salinities at five quadrature points [C ~> degC] and [S ~> ppt]
   real :: p5(5),p5r(5),p5l(5)      ! Pressures at five quadrature points [R L2 T-2 ~> Pa]
   real :: r5(5)      ! Densities at five quadrature points [R ~> kg m-3]
   real, parameter :: C1_90 = 1.0/90.0  ! A rational constant [nondim]
   real :: wt_R !A weighting
+  real :: rho_tr, rho_tl ! Store right and left densities in reset intxpa calculation
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
@@ -881,6 +895,10 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
                   rho_ref, CS%Rho0, GV%g_Earth, G%HI, tv%eqn_of_state, US, dpa, &
                   intz_dpa, intx_dpa, inty_dpa, G%bathyT, dz_neglect, CS%useMassWghtInterp, Z_0p=G%Z_ref)
       endif
+      !fill 3D arrays
+      intz_dpa_3D(:,:,k) = intz_dpa
+      intx_dpa_3D(:,:,k) = intx_dpa
+      inty_dpa_3D(:,:,k) = inty_dpa
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         intz_dpa(i,j) = intz_dpa(i,j)*GV%Z_to_H
@@ -925,10 +943,87 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       inty_pa(i,J) = inty_pa(i,J) + inty_dpa(i,J)
     enddo ; enddo
     !$OMP parallel do default(shared)
+    ! Fill 3D pressure before updating
+    pa_3D(:,:,k) = pa
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       pa(i,j) = pa(i,j) + dpa(i,j)
     enddo ; enddo
   enddo
+
+  ! having stored the pressure gradient info, we can work out where the first nonvanished layers is
+  ! reset intxpa there
+  ! adjust intxpa above and below, and then recalculate PFu/PFv
+  ! note: currently assumes pressure varies quadratically between bottom of first nonvanished, nonMWIPG level
+  ! possibly 5 pt quadrature should be implemented as for the surface
+  if (CS%reset_intxpa_integral) then
+   do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    kloop: do k=1,nz-1
+    !Check if both sides are nonvanished and MWIPG is not activated
+    if ((h(i,j,k)>1.e-6).and.(h(i+1,j,k)>1.e-6)) then
+     if (.not. (max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1)) > 1.e-8)) then
+     !calculate pressure at the bottom of this cell (pa are known)
+     ! then we have a "good estimate" for intxpa (it might have quadratic pressure dependence if sloped)
+     ! now we recalculate intx_pa and PFu at each level working up and then down
+     call calculate_density(T_t(I,j,k+1), S_t(I,j,k+1), pa_3D(i,j,k+1), rho_tl, &   
+                                 tv%eqn_of_state, rho_ref=rho_ref) 
+     call calculate_density(T_t(I+1,j,k+1), S_t(I+1,j,k+1), pa_3D(i+1,j,k+1), rho_tr, & 
+                                 tv%eqn_of_state, rho_ref = rho_ref)             
+     correction_x(I,j) = (rho_tr-rho_tl)*GV%g_Earth/12*(e(i+1,j,k+1)-e(i,j,k+1)) 
+     intx_pa_3D(i,j,k+1) = 0.5*(pa_3D(i,j,k+1) + pa_3D(i+1,j,k+1)) + correction_x(I,j)
+     do k2=1,k
+      intx_pa_3D(i,j,k-k2+1) = intx_pa_3D(i,j,(k-k2+2)) - intx_dpa_3D(i,j,k-k2+1)
+     enddo
+     do k2=k+2,nz
+      intx_pa_3D(i,j,k2) = intx_pa_3D(i,j,k2-1) + intx_dpa_3D(i,j,k2-1)
+     enddo
+      ! Now with fixed pressures, calculate PFu everywhere      
+     do k2=1,nz
+      PFu(I,j,k2) = (((pa_3D(i,j,k2)*h(i,j,k2) + intz_dpa_3D(i,j,k2)) - &
+                   (pa_3D(i+1,j,k2)*h(i+1,j,k2) + intz_dpa_3D(i+1,j,k2))) + &
+                   ((h(i+1,j,k2) - h(i,j,k2)) * intx_pa_3D(I,j,k2) - &
+                   (e(i+1,j,k2+1) - e(i,j,k2+1)) * intx_dpa_3D(I,j,k2) * GV%Z_to_H)) * &
+                   ((2.0*I_Rho0*G%IdxCu(I,j)) / &
+                   ((h(i,j,k2) + h(i+1,j,k2)) + h_neglect))
+     enddo
+     exit kloop
+    endif; endif
+   enddo kloop; enddo
+  enddo
+
+   do J=Jsq,Jeq+1 ; do i=is,ie+1 
+    kloop2: do k=1,nz-1
+    !Check if both sides are nonvanished and MWIPG is not activated
+    if ((h(i,j,k)>1.e-6).and.(h(i,j+1,k)>1.e-6)) then
+     if (.not. (max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1)) > 1.e-8)) then
+     !calculate pressure at the bottom of this cell (pa are known)
+     ! then we have a "good estimate" for intxpa (it might have quadratic pressure dependence if sloped)
+     ! now we recalculate intx_pa and PFu at each level working up and then down
+     call calculate_density(T_t(I,j,k+1), S_t(I,j,k+1), pa_3D(i,j,k+1), rho_tl, &
+                                 tv%eqn_of_state, rho_ref=rho_ref)
+     call calculate_density(T_t(I,j+1,k+1), S_t(I,j+1,k+1), pa_3D(i,j+1,k+1), rho_tr, &
+                                 tv%eqn_of_state, rho_ref = rho_ref)
+     correction_y(I,j) = (rho_tr-rho_tl)*GV%g_Earth/12*(e(i,j+1,k+1)-e(i,j,k+1))
+     inty_pa_3D(i,j,k+1) = 0.5*(pa_3D(i,j,k+1) + pa_3D(i,j+1,k+1)) + correction_y(I,j) 
+     do k2=1,k
+      inty_pa_3D(i,j,k-k2+1) = inty_pa_3D(i,j,(k-k2+2)) - inty_dpa_3D(i,j,k-k2+1)
+     enddo
+     do k2=k+2,nz
+      inty_pa_3D(i,j,k2) = inty_pa_3D(i,j,k2-1) + inty_dpa_3D(i,j,k2-1)
+     enddo
+      ! Now with fixed pressures, calculate PFu everywhere      
+     do k2=1,nz
+      PFv(I,j,k2) = (((pa_3D(i,j,k2)*h(i,j,k2) + intz_dpa_3D(i,j,k2)) - &
+                   (pa_3D(i,j+1,k2)*h(i,j+1,k2) + intz_dpa_3D(i,j+1,k2))) + &
+                   ((h(i,j+1,k2) - h(i,j,k2)) * inty_pa_3D(I,j,k2) - &
+                   (e(i,j+1,k2+1) - e(i,j,k2+1)) * inty_dpa_3D(I,j,k2) * GV%Z_to_H)) * &
+                   ((2.0*I_Rho0*G%IdyCv(I,j)) / &
+                   ((h(i,j,k2) + h(i,j+1,k2)) + h_neglect))
+      enddo
+     exit kloop2
+    endif; endif
+   enddo kloop2; enddo
+  enddo
+  endif ! PFu is now set and should be correct
 
   if (CS%GFS_scale < 1.0) then
     do k=1,nz
@@ -1098,6 +1193,9 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
   call get_param(param_file, mdl, "CORRECTION_INTXPA_5PT",CS%correction_intxpa_5pt, &
                  "If true, use 5point quadrature to calculate intxpa. This requires "//&
                  "CORRECTION_INTXPA = True.",default = .false.)
+  call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL",CS%reset_intxpa_integral, &
+                 "If true, reset INTXPA to match pressures at first nonvanished cell. "//&
+                 "Includes pressure correction. ", default = .false.)
   call get_param(param_file, mdl, "USE_INACCURATE_PGF_RHO_ANOM", CS%use_inaccurate_pgf_rho_anom, &
                  "If true, use a form of the PGF that uses the reference density "//&
                  "in an inaccurate way. This is not recommended.", default=.false.)
