@@ -48,6 +48,7 @@ type, public :: PressureForce_FV_CS ; private
                             !! timing of diagnostic output.
   logical :: useMassWghtInterp !< Use mass weighting in T/S interpolation
   logical :: useMassWghtInterpis !< Use mass weighting in T/S interpolation for top boundary
+  logical :: correction_intxpa ! Use correction to surface intxpa
   logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
                             !! method to calculate density anomalies, as used prior to
                             !! March 2018.
@@ -504,11 +505,14 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     intx_pa, &  ! The zonal integral of the pressure anomaly along the interface
                 ! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
-    intx_dpa    ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+    intx_dpa, & ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+    correction_x! Correction for curvature in intx_pa
+
   real, dimension(SZI_(G),SZJB_(G)) :: &
     inty_pa, &  ! The meridional integral of the pressure anomaly along the
                 ! interface atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
-    inty_dpa    ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+    inty_dpa, & ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+    correction_y! Correction for curvature in inty_pa
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
     T_tmp, &    ! Temporary array of temperatures where layers that are lighter
@@ -520,6 +524,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
                 ! of salinity within each layer [S ~> ppt].
     T_t, T_b    ! Top and bottom edge values for linear reconstructions
                 ! of temperature within each layer [C ~> degC].
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+    rho_top     ! Density of top layer used in calculating correction_x and correction_y
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
     rho_pgf, rho_stanley_pgf ! Density [R ~> kg m-3] from EOS with and without SGS T variance
                              ! in Stanley parameterization.
@@ -732,13 +738,52 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       pa(i,j) = (rho_ref*GV%g_Earth)*(e(i,j,1) - G%Z_ref)
     enddo ; enddo
   endif
+
+  !Determine surface density so it can be used in pressure correction
+  if (CS%correction_intxpa) then
+   do j=Jsq,Jeq+1
+    call calculate_density(T_t(:,j,1), S_t(:,j,1), p_ref, rho_top(:,j), &
+                                 tv%eqn_of_state, EOSdom)
+   enddo
+  endif
+
   !$OMP parallel do default(shared)
   do j=js,je ; do I=Isq,Ieq
-    intx_pa(I,j) = 0.5*(pa(i,j) + pa(i+1,j))
+    if (CS%correction_intxpa) then
+     if (abs(pa(i+1,j) - pa(i,j)) > abs((rho_top(I+1,j)+rho_top(I,j)-2.0*rho_ref)/4.0*(-e(i+1,j,1)+e(i,j,1))*GV%g_Earth)) then
+      ! pressure difference is at least half the size of the difference expected by hydrostatic balance
+      ! this gets rid of pressure differences that are small e.g. open ocean
+      if (((pa(i+1,j)-pa(i,j))*(-e(i+1,j,1)+e(i,j,1)))<0.0) then !!! pressre/depth relationship has a positive density
+       correction_x(I,j) = (rho_top(I+1,j)-rho_top(I,j))*GV%g_Earth/12*(e(i+1,j,1)-e(i,j,1))
+      else ! pressure difference and depth difference opposite in sign to hydrostatic pressure change
+       correction_x(I,j) = 0.0      
+      endif
+     else !pressure difference too small to be explained by hydrostatic pressure change
+      correction_x(I,j) = 0.0
+     endif
+     intx_pa(I,j) = 0.5*(pa(i,j) + pa(i+1,j)) + correction_x(I,j)
+    else
+     intx_pa(I,j) = 0.5*(pa(i,j) + pa(i+1,j))
+    endif
   enddo ; enddo
   !$OMP parallel do default(shared)
   do J=Jsq,Jeq ; do i=is,ie
-    inty_pa(i,J) = 0.5*(pa(i,j) + pa(i,j+1))
+    if (CS%correction_intxpa) then
+     if (abs(pa(i,j+1) - pa(i,j)) > abs((rho_top(i,J+1)+rho_top(i,J)-2.0*rho_ref)/4.0*(-e(i,j+1,1)+e(i,j,1))*GV%g_Earth)) then
+      ! pressure difference is at least half the size of the difference expected by hydrostatic balance
+      ! this gets rid of pressure differences that are small e.g. open ocean
+      if (((pa(i,j+1)-pa(i,j))*(-e(i,j+1,1)+e(i,j,1)))<0.0) then !!! pressre/depth relationship has a positive density
+       correction_y(i,J) = (rho_top(i,J+1)-rho_top(i,J))*GV%g_Earth/12*(e(i,j+1,1)-e(i,j,1))
+      else ! pressure difference and depth difference opposite in sign to hydrostatic pressure change
+       correction_y(i,J) = 0.0
+      endif
+     else !pressure difference too small to be explained by hydrostatic pressure change
+      correction_y(i,J) = 0.0
+     endif
+     inty_pa(i,J) = 0.5*(pa(i,j) + pa(i,j+1)) + correction_y(i,J)
+    else
+     inty_pa(i,J) = 0.5*(pa(i,j) + pa(i,j+1))
+    endif
   enddo ; enddo
 
   do k=1,nz
@@ -979,6 +1024,9 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
                  "If true, use mass weighting when interpolating T/S for "//&
                  "integrals near the top in FV pressure gradient calculations. "//&
                  "Defaults to MASS_WEIGHT_IN_PRESSURE_GRADIENT.", default=CS%useMassWghtInterp)
+  call get_param(param_file, mdl, "CORRECTION_INTXPA",CS%correction_intxpa, &
+                 "If true, use a correction for surface pressure curvature in intx_pa.", &
+                 default = .false.)
   call get_param(param_file, mdl, "USE_INACCURATE_PGF_RHO_ANOM", CS%use_inaccurate_pgf_rho_anom, &
                  "If true, use a form of the PGF that uses the reference density "//&
                  "in an inaccurate way. This is not recommended.", default=.false.)
