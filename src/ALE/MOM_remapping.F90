@@ -656,8 +656,8 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
   uh_sub(1) = 0.
   u_sub(1) = ppoly0_E(1,1)
   u02_err = 0.
-  do i_sub = 2, n0+n1
-
+  !do i_sub = 2, n0+n1
+  do i_sub = 2, n0+n1+1
     ! Sub-cell thickness from loop above
     dh = h_sub(i_sub)
 
@@ -669,7 +669,8 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
     ! positions with source cell from xa to xb  (0 <= xa <= xb <= 1).
     dh0_eff = dh0_eff + dh ! Cumulative thickness within the source cell
     if (h0_eff(i0)>0.) then
-      xb = dh0_eff / h0_eff(i0) ! This expression yields xa <= xb <= 1.0
+      !xb = dh0_eff / h0_eff(i0) ! This expression yields xa <= xb <= 1.0
+      xb = dh0_eff / h0(i0)
       xb = min(1., xb) ! This is only needed when the total target column is wider than the source column
       u_sub(i_sub) = average_value_ppoly( n0, u0, ppoly0_E, ppoly0_coefs, method, i0, xa, xb)
     else ! Vanished cell
@@ -699,7 +700,7 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
       u02_err = u02_err + dh*abs( u_sub(i_sub) - u_orig )
     endif
     uh_sub(i_sub) = dh * u_sub(i_sub)
-
+   if (i_sub <= n0+n1) then
     if (isub_src(i_sub+1) /= i0) then
       ! If the next sub-cell is in a different source cell, reset the position counters
       dh0_eff = 0.
@@ -707,10 +708,11 @@ subroutine remap_via_sub_cells( n0, h0, u0, ppoly0_E, ppoly0_coefs, n1, h1, meth
     else
       xa = xb ! Next integral will start at end of last
     endif
+   endif
 
   enddo
-  u_sub(n0+n1+1) = ppoly0_E(n0,2)                   ! This value is only needed when total target column
-  uh_sub(n0+n1+1) = ppoly0_E(n0,2) * h_sub(n0+n1+1) ! is wider than the source column
+  !u_sub(n0+n1+1) = ppoly0_E(n0,2)                   ! This value is only needed when total target column
+  !uh_sub(n0+n1+1) = ppoly0_E(n0,2) * h_sub(n0+n1+1) ! is wider than the source column
 
   if (adjust_thickest_subcell) then
     ! Loop over each source cell substituting the integral/average for the thickest sub-cell (within
