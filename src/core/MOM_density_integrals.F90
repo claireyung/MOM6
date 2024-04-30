@@ -640,6 +640,17 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
     ! this distance by the layer thickness to replicate other models.
       hWght = massWeightToggle * &
               max(0., -bathyT(i,j)-e(i,j+1,K), -bathyT(i,j+1)-e(i,j,K))
+      ! CY: The below code just uses top interface, which may be bad in high res open ocean
+      ! We want something like if (pa(i+1,k+1)<pa(i,1)) or (pa(i+1,1) <pa(i,k+1)) then...
+      ! but pressures are not passed through to this submodule, and tv just has surface press.
+      !if ((p(i+1,j,k+1)<p(i,j,1)).or.(tv%p(i+1,j,k+1)<tv%p(i,j,1))) then
+      hWghtis = isWeightToggle * &
+              max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1))
+      !else !pressure criteria not activated
+      ! hWghtis = 0.
+      !endif
+      ! Set it to be max of the bottom and top hWghts:
+      hWght = max(hWght,hWghtis)
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
         hR = (e(i,j+1,K) - e(i,j+1,K+1)) + dz_subroundoff
