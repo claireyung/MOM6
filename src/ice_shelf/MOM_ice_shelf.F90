@@ -62,6 +62,7 @@ use MOM_spatial_means, only : global_area_integral
 use MOM_checksums, only : hchksum, qchksum, chksum, uchksum, vchksum, uvchksum
 use MOM_interpolate, only : init_external_field, time_interp_external, time_interp_external_init
 use MOM_interpolate, only : external_field
+use MOM_intrinsic_functions, only : cuberoot
 
 implicit none ; private
 
@@ -208,9 +209,15 @@ type, public :: ice_shelf_CS ; private
                                          !! - dimensionless
   real :: sf_gamma_S_lim                 !< Maximum SF temperature salinity coefficient - dimensionless
   real :: sf_gamma_T_lim                 !< Maximum SF temperature transfer coefficient - dimensionless
-  real :: sf_Lplus_buoy_itt_threshold    !< Threshold for iteration of Lplus for convergence in SF parameterisation
-                                         !! - dimensionless
-
+  real :: sf_Lplus_buoy_itt_threshold    !< Threshold for iteration of Lplus for convergence in SF
+                                         !! parameterisation - dimensionless
+  logical :: use_mk18_gamma_conv_limit   !< If true, use the McConnochie and Kerr (2018; MK18) convective
+                                         !! melt parameterisation at the low velocity limit
+  logical :: use_mk18_gamma_local_angle  !< If true, calculate the ice base slope from ice base input,
+                                         !! otherwise use a constant angle mk18_gamma_conv_angle
+  real :: mk18_gamma_conv_angle          !< Constant angle for MK18 parameterisation (degrees), where 90
+                                         !! is vertical - dimensionless
+  real :: mk18_gamma_scaling_factor      !< Constant scaling factor for MK18 parameterisation - dimensionless
 
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
@@ -221,7 +228,8 @@ type, public :: ice_shelf_CS ; private
              id_surf_elev = -1, id_bathym = -1, &
              id_area_shelf_h = -1, &
              id_ustar_shelf = -1, id_shelf_mass = -1, id_mass_flux = -1, &
-             id_shelf_sfc_mass_flux = -1, id_lplus = -1
+             id_shelf_sfc_mass_flux = -1, id_lplus = -1, &
+             id_ice_base_angle = -1
   !>@}
 
   type(external_field) :: mass_handle
@@ -349,6 +357,16 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   ! Variables used in iterating for SF parameterisation
   real :: I_Gam_T_new, I_Gam_S_new  ! updated T and S transfer coefficients - nondim
   real :: Lplus_new ! updated Lplus - nondim
+  ! Variables used in MK18 limit of parameterisation
+  real :: local_slope
+  real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
+    exch_vel_t_conv, &      ! Sub-shelf effective convective thermal exchange velocity [Z T-1 ~> m s-1]
+    ice_base_angle, &       ! Local slope calculated from draft, where 0 degrees is horizontal - nondim
+    draft                   ! Draft calculated from ice mass over water density [L ~> m]
+  real :: dhx,dhy           ! Intermediate saved variables of lengths [L ~> m]
+  real :: I_dx, I_dy        ! Intermediate saved variables of inverse lengths [L-1 ~> m-1] 
+  real, parameter :: rad_to_deg = 180.0/3.1415 ! Conversion factor radians to degrees
+  real, parameter :: deg_to_rad = 3.1415/180.0 ! Conversion factor degrees to radians
 
   real, parameter :: c2_3 = 2.0/3.0
   character(len=160) :: mesg  ! The text of an error message
@@ -401,7 +419,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   ! However, they seem to be changed somewhere and, for diagnostic
   ! reasons, it is better to set them to zero again.
   exch_vel_t(:,:) = 0.0 ; exch_vel_s(:,:) = 0.0
-  lplus(:,:) = 0.0
+  lplus(:,:) = 0.0; ice_base_angle(:,:) = 0.0
   ISS%tflux_shelf(:,:) = 0.0 ; ISS%water_flux(:,:) = 0.0
   ISS%salt_flux(:,:) = 0.0 ; ISS%tflux_ocn(:,:) = 0.0 ; ISS%tfreeze(:,:) = 0.0
   ! define Sbdry to avoid Run-Time Check Failure, when melt is not computed.
@@ -462,6 +480,48 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   else ! There is no shelf here.
     fluxes%ustar_shelf(i,j) = 0.0
   endif ; enddo ; enddo
+
+  ! Calculate local angle if needed by CS%use_mk18_gamma_local_angle
+  if (CS%use_mk18_gamma_conv_limit) then
+    if (CS%use_mk18_gamma_local_angle) then
+      ! Calculate approximate ice draft from ice mass
+      do j=js,je
+        do i=is,ie
+          draft(i,j) = ISS%mass_shelf(i,j)/1028 ! Approximate
+        enddo
+      enddo
+      ! Calculate ice draft differences from centred difference,
+      ! treating boundaries differently (forward/backward difference)
+      do j=js,je
+        do i=is,ie
+          if (i == is) then
+              dhx = draft(i+1,j)-draft(i,j)
+              I_dx = G%IdxT(i,j) !probably should be on v/u grid....
+          elseif (i == ie) then
+              dhx = draft(i,j)-draft(i-1,j)
+              I_dx = G%IdxT(i,j)
+          else
+              dhx = draft(i+1,j)-draft(i-1,j)
+              I_dx = 0.5*G%IdxT(i,j)
+          endif
+          if (j == js) then
+              dhy = draft(i,j+1)-draft(i,j)
+              I_dy = G%IdyT(i,j)
+          elseif (j == je) then
+              dhy = draft(i,j)-draft(i,j-1)
+              I_dy = G%IdyT(i,j)
+          else
+              dhy = draft(i,j+1)-draft(i,j-1)
+              I_dy = 0.5*G%IdyT(i,j)
+          endif
+          local_slope = sqrt((dhx*I_dx)**2.0+(dhy*I_dy)**2.0)
+          ice_base_angle(i,j) = atan(local_slope)*rad_to_deg
+        enddo
+      enddo
+    else ! Set it to be constant angle given by parameter
+      ice_base_angle(:,:) = CS%mk18_gamma_conv_angle
+    endif
+  endif
 
   EOSdom(:) = EOS_domain(G%HI)
   do j=js,je
@@ -651,6 +711,23 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
             exch_vel_t(i,j) = ustar_h * I_Gam_T
             exch_vel_s(i,j) = ustar_h * I_Gam_S
+
+            ! If using MK18 convective limit at low velocities, use max of
+            ! effective transfer velocity and velocity-dependent transfer velocity
+            if (CS%use_mk18_gamma_conv_limit) then
+              ! If limiting to MK18 convective param, determine equivalent exchange velocity
+              exch_vel_t_conv(i,j) = cuberoot((CS%g_Earth * (sfc_state%sss(i,j)-Sbdry(i,j)) * &
+                 dR0_dS(i) * sqrt(CS%kd_molec_salt) * I_kv_molec))* &
+                 CS%mk18_gamma_scaling_factor * sqrt(CS%kd_molec_temp) * &
+                 ((sin(ice_base_angle(i,j)*deg_to_rad))**(2.0/3.0))
+              if (exch_vel_t_conv(i,j) > exch_vel_t(i,j)) then
+                ! use exchange velocity from convective param instead of shear-driven ustar one
+                exch_vel_t(i,j) = max( exch_vel_t(i,j), exch_vel_t_conv(i,j))
+                exch_vel_s(i,j) = max( exch_vel_s(i,j), exch_vel_t_conv(i,j)/35)
+                wT_flux = exch_vel_t(i,j)* (ISS%tfreeze(i,j) - sfc_state%sst(i,j))
+                ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
+              endif
+            endif
 
             ! Calculate the heat flux inside the ice shelf.
             ! Vertical adv/diff as in H+J 1999, equations (26) & approx from (31).
@@ -879,6 +956,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   if (CS%id_dhdt_shelf > 0) call post_data(CS%id_dhdt_shelf, ISS%dhdt_shelf, CS%diag)
   if (CS%id_h_mask > 0) call post_data(CS%id_h_mask,ISS%hmask,CS%diag)
   if (CS%id_lplus > 0) call post_data(CS%id_lplus, lplus, CS%diag)
+  if (CS%id_ice_base_angle > 0) call post_data(CS%id_ice_base_angle, ice_base_angle, CS%diag)
 
   call disable_averaging(CS%diag)
 
@@ -1599,7 +1677,24 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
     call get_param(param_file, mdl, "SHELF_3EQ_SF_LPLUS_BUOY_ITT_THRESHOLD", &
                  CS%sf_Lplus_buoy_itt_threshold, "Threshold for Lplus buoyancy "//&
                  "iteration convergence.", units = "nondim", default=1e-2)
-
+  endif
+  call get_param(param_file, mdl, "SHELF_3EQ_MK18_CONV_PARAM_LIMIT", CS%use_mk18_gamma_conv_limit, &
+                "If true, use the McConnochie and Kerr (2018) convective parameterisation "//&
+                "at the low melt limit with a continuous connection between regimes", &
+                default=.false.)
+  if (CS%use_mk18_gamma_conv_limit) then
+    call get_param(param_file, mdl, "SHELF_3EQ_MK18_CONV_LOCAL_ANGLE", CS%use_mk18_gamma_local_angle, &
+                 "Use local angle calculated from approximatuion of ice base draft from mass.", &
+                 default = .true.)
+    call get_param(param_file, mdl, "SHELF_3EQ_MK18_CONV_ANGLE", CS%mk18_gamma_conv_angle, &
+                "Angle from the vertical (90 vertical, 0 horizontal) for McConnochie "//&
+                "and Kerr (2018) convective parameterisation. Kerr and McConnochie (2015) "//&
+                "can be retrieved with angle 0. Not used unless "//&
+                "SHELF_3EQ_R22_CONV_ANGLE_USE_LOCAL false.", units = "nondim", default=5.0e-2)
+    call get_param(param_file, mdl, "SHELF_3EQ_MK18_SCALING_COEFF", CS%mk18_gamma_scaling_factor, &
+                "Scaling factor for the effective transfer velocity calculated from "//&
+                "McConnochie and Kerr 2018 melt rate. Defaults to MK18 lab value.", &
+                units = "nondim", default = 8.6e-2)
   endif
 
   call get_param(param_file, mdl, "G_EARTH", CS%g_Earth, &
@@ -1966,6 +2061,12 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, Time_init,
   if (CS%use_sf_gamma_param) then
     CS%id_lplus = register_diag_field('ice_shelf_model', 'lplus', CS%diag%axesT1, CS%Time, &
         'Viscous Obukhov scale', 'none')
+  endif
+  if (CS%use_mk18_gamma_conv_limit) then
+    if (CS%use_mk18_gamma_local_angle) then
+      CS%id_ice_base_angle = register_diag_field('ice_shelf_model', 'ice_base_angle', CS%diag%axesT1, CS%Time, &
+          'Ice base angle from the horizontal (degrees)', 'none')
+    endif
   endif
   if (CS%active_shelf_dynamics) then
     CS%id_h_mask = register_diag_field('ice_shelf_model', 'h_mask', CS%diag%axesT1, CS%Time, &
