@@ -358,9 +358,10 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   real :: I_Gam_T_new, I_Gam_S_new  ! updated T and S transfer coefficients - nondim
   real :: Lplus_new ! updated Lplus - nondim
   ! Variables used in MK18 limit of parameterisation
-  real :: local_slope
+  real :: local_slope, sqrtratioheatsaltdiff !Nondim
   real, dimension(SZI_(CS%grid),SZJ_(CS%grid)) :: &
     exch_vel_t_conv, &      ! Sub-shelf effective convective thermal exchange velocity [Z T-1 ~> m s-1]
+    exch_vel_s_conv, &      ! Sub-shelf effective convective haline exchange velocity [Z T-1 ~> m s-1]
     ice_base_angle, &       ! Local slope calculated from draft, where 0 degrees is horizontal - nondim
     draft                   ! Draft calculated from ice mass over water density [L ~> m]
   real :: dhx,dhy           ! Intermediate saved variables of lengths [L ~> m]
@@ -409,6 +410,7 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
   RhoCp = CS%Rho_ocn * CS%Cp
   kv_molec = CS%kv_molec
   I_kv_molec = 1.0/kv_molec
+  sqrtratioheatsaltdiff = sqrt(CS%kd_molec_salt/CS%kd_molec_temp)
 
   !first calculate molecular component
   Gam_mol_t = 12.5 * (PR**c2_3) - 6.0
@@ -717,13 +719,15 @@ subroutine shelf_calc_flux(sfc_state_in, fluxes_in, Time, time_step_in, CS)
             if (CS%use_mk18_gamma_conv_limit) then
               ! If limiting to MK18 convective param, determine equivalent exchange velocity
               exch_vel_t_conv(i,j) = cuberoot((CS%g_Earth * (sfc_state%sss(i,j)-Sbdry(i,j)) * &
-                 dR0_dS(i) * sqrt(CS%kd_molec_salt) * I_kv_molec))* &
+                 dR0_dS(i) * sqrt(CS%kd_molec_salt) * I_kv_molec * Irho0 ))* &
                  CS%mk18_gamma_scaling_factor * sqrt(CS%kd_molec_temp) * &
                  ((sin(ice_base_angle(i,j)*deg_to_rad))**(2.0/3.0))
+              exch_vel_s_conv(i,j) = exch_vel_t_conv(i,j)*((Irho0*CS%density_ice)* &
+                      (Sbdry(i,j) / sfc_state%sss(i,j))*sqrtratioheatsaltdiff)
               if (exch_vel_t_conv(i,j) > exch_vel_t(i,j)) then
                 ! use exchange velocity from convective param instead of shear-driven ustar one
                 exch_vel_t(i,j) = max( exch_vel_t(i,j), exch_vel_t_conv(i,j))
-                exch_vel_s(i,j) = max( exch_vel_s(i,j), exch_vel_t_conv(i,j)/35)
+                exch_vel_s(i,j) = max( exch_vel_s(i,j), exch_vel_s_conv(i,j))
                 wT_flux = exch_vel_t(i,j)* (ISS%tfreeze(i,j) - sfc_state%sst(i,j))
                 ISS%tflux_ocn(i,j)  = RhoCp * wT_flux
               endif
