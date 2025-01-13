@@ -2153,9 +2153,9 @@ real function frac_dp_at_pos(T_t, T_b, S_t, S_b, z_t, z_b, rho_ref, G_e, pos, EO
     S5(n) = top_weight * S_t + bottom_weight * S_b
     T5(n) = top_weight * T_t + bottom_weight * T_b
     if (frac_dp_bugfix) then
-     p5(n) = (-1) * ( top_weight * z_t + bottom_weight * z_b ) * ( G_e * rho_ref )
+      p5(n) = (-1) * ( top_weight * z_t + bottom_weight * z_b ) * ( G_e * rho_ref )
     else
-     p5(n) = ( top_weight * z_t + bottom_weight * z_b ) * ( G_e * rho_ref )
+      p5(n) = ( top_weight * z_t + bottom_weight * z_b ) * ( G_e * rho_ref )
     endif !bugfix
   enddo
   call calculate_density(T5, S5, p5, rho5, EOS)

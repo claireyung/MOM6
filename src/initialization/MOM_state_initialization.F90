@@ -1423,7 +1423,7 @@ subroutine cut_off_column_top(nk, tv, GV, US, G_earth, depth, min_thickness, T, 
       call find_depth_of_pressure_in_cell(T_t(k), T_b(k), S_t(k), S_b(k), e(K), e(K+1), &
                                           P_t, p_surf, GV%Rho0, G_earth, tv%eqn_of_state, &
                                           US, P_b, z_out, z_tol=z_tol, &
-                                          frac_dp_bugfix = frac_dp_bugfix)
+                                          frac_dp_bugfix=frac_dp_bugfix)
       if (z_out>=e(K)) then
         ! Imposed pressure was less that pressure at top of cell
         exit
@@ -3147,7 +3147,7 @@ subroutine MOM_state_init_tests(G, GV, US, tv)
   do k = 1, nk
     call find_depth_of_pressure_in_cell(T_t(k), T_b(k), S_t(k), S_b(k), e(K), e(K+1), P_t, 0.5*P_tot, &
                                         GV%Rho0, GV%g_Earth, tv%eqn_of_state, US, P_b, z_out, z_tol=z_tol, &
-                                        frac_dp_bugfix = .false.)
+                                        frac_dp_bugfix=.false.)
     write(0,*) k, US%RL2_T2_to_Pa*P_t, US%RL2_T2_to_Pa*P_b, 0.5*US%RL2_T2_to_Pa*P_tot, &
                US%Z_to_m*e(K), US%Z_to_m*e(K+1), US%Z_to_m*z_out
     P_t = P_b
@@ -3167,7 +3167,7 @@ subroutine MOM_state_init_tests(G, GV, US, tv)
   ! endif
   call cut_off_column_top(nk, tv, GV, US, GV%g_Earth, -e(nk+1), GV%Angstrom_H, &
                           T, T_t, T_b, S, S_t, S_b, 0.5*P_tot, h, remap_CS, z_tol=z_tol, &
-                          frac_dp_bugfix = .false.)
+                          frac_dp_bugfix=.false.)
   write(0,*) GV%H_to_m*h(:)
   if (associated(remap_CS)) deallocate(remap_CS)
 
