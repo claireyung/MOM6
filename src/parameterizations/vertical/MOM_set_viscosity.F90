@@ -31,6 +31,8 @@ use MOM_safe_alloc,    only : safe_alloc_ptr, safe_alloc_alloc
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : thermo_var_ptrs, vertvisc_type, porous_barrier_type
 use MOM_verticalGrid,  only : verticalGrid_type, get_thickness_units
+use MOM_time_manager, only : time_type, time_type_to_real, real_to_time, operator(>), operator(-)
+
 
 implicit none ; private
 
@@ -111,6 +113,11 @@ type, public :: set_visc_CS ; private
   logical :: debug          !< If true, write verbose checksums for debugging purposes.
   logical :: BBL_use_tidal_bg !< If true, use a tidal background amplitude for the bottom velocity
                             !! when computing the bottom stress.
+  real    :: rayleigh_drag_minrate, rayleigh_drag_maxrate !, rayleigh_drag_time
+  real :: time_sec !!type(time_type), target    :: Time !< The current model time.
+  real :: rayleigh_drag_time
+
+
   character(len=200) :: inputdir !< The directory for input files.
   type(ocean_OBC_type), pointer :: OBC => NULL() !< Open boundaries control structure
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
@@ -123,7 +130,7 @@ type, public :: set_visc_CS ; private
   !>@{ Diagnostics handles
   integer :: id_bbl_thick_u = -1, id_kv_bbl_u = -1, id_bbl_u = -1
   integer :: id_bbl_thick_v = -1, id_kv_bbl_v = -1, id_bbl_v = -1
-  integer :: id_Ray_u = -1, id_Ray_v = -1
+  integer :: id_Ray_u = -1, id_Ray_v = -1, id_Ray_h = -1
   integer :: id_nkml_visc_u = -1, id_nkml_visc_v = -1
   !>@}
 end type set_visc_CS
@@ -131,7 +138,7 @@ end type set_visc_CS
 contains
 
 !> Calculates the thickness of the bottom boundary layer and the viscosity within that layer.
-subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
+subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv, Time)
   type(ocean_grid_type),    intent(inout) :: G    !< The ocean's grid structure.
   type(verticalGrid_type),  intent(in)    :: GV   !< The ocean's vertical grid structure.
   type(unit_scale_type),    intent(in)    :: US   !< A dimensional unit scaling type
@@ -149,6 +156,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   type(set_visc_CS),        intent(inout) :: CS   !< The control structure returned by a previous
                                                   !! call to set_visc_init.
   type(porous_barrier_type),intent(in)    :: pbv  !< porous barrier fractional cell metrics
+  type(time_type), target, intent(in)    :: Time !< The current model time.
 
   ! Local variables
   real, dimension(SZIB_(G)) :: &
@@ -306,6 +314,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, m, n, K2, nkmb, nkml
   type(ocean_OBC_type), pointer :: OBC => NULL()
+  real :: dragrate, time_sec         ! Rayleigh drag rate at time 
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%isc-1 ; Ieq = G%IecB ; Jsq = G%jsc-1 ; Jeq = G%JecB
@@ -345,6 +354,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   cdrag_RL_to_H = CS%cdrag * US%L_to_Z * GV%RZ_to_H
   BBL_thick_max = G%Rad_Earth_L * US%L_to_Z
   K2 = max(nkmb+1, 2)
+  time_sec = US%s_to_T*time_type_to_real(Time) !CS%time_sec
 
   ! Find the vertical distances across layers.
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
@@ -418,6 +428,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
 
   if (allocated(visc%Ray_u)) visc%Ray_u(:,:,:) = 0.0
   if (allocated(visc%Ray_v)) visc%Ray_v(:,:,:) = 0.0
+  if (allocated(visc%h_at_vel)) visc%h_at_vel(:,:,:) = 0.0
 
   !$OMP parallel do default(private) shared(u,v,h,dz,tv,visc,G,GV,US,CS,Rml,nz,nkmb,nkml,K2, &
   !$OMP                                     Isq,Ieq,Jsq,Jeq,h_neglect,dz_neglect,Rho0x400_G, &
@@ -1066,7 +1077,23 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
         visc%bbl_thick_v(i,J) = bbl_thick
         if (allocated(visc%Kv_bbl_v)) visc%Kv_bbl_v(i,J) = kv_bbl
       endif
-    endif ; enddo ! end of i loop
+!    endif ; enddo ! end of i loop
+    endif 
+    if (CS%rayleigh_drag_minrate > 0) then
+        ! We will apply a Rayleigh drag that grows over a timescale 
+        ! time is a placeholder!
+        ! Note this OVERRIDES previous bottom drag - could alternatively add it to prev value
+      dragrate = min( ((time_sec)/CS%rayleigh_drag_time)* &
+                   CS%rayleigh_drag_maxrate+CS%rayleigh_drag_minrate, CS%rayleigh_drag_maxrate)
+        !print*, 'dragrate', dragrate
+      do k=1,nz 
+        visc%h_at_vel(i,j,k) = 0.5 * (h(i,j,k) + h(i+1,j,k))
+        visc%Ray_u(i,j,k) = dragrate*visc%h_at_vel(i,j,k)
+        visc%Ray_v(i,j,k) = dragrate*visc%h_at_vel(i,j,k)
+        !visc%h_at_vel(i,j,k) = h_at_vel(i,k)
+      enddo
+    endif                            
+   enddo ! end of i loop
   enddo ; enddo ! end of m & j loops
 
 ! Offer diagnostics for averaging
@@ -1086,7 +1113,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
     call post_data(CS%id_Ray_u, visc%Ray_u, CS%diag)
   if (CS%id_Ray_v > 0) &
     call post_data(CS%id_Ray_v, visc%Ray_v, CS%diag)
-
+  if (CS%id_Ray_h > 0) &
+    call post_data(CS%id_Ray_h, visc%h_at_vel, CS%diag)
   if (CS%debug) then
     if (allocated(visc%Ray_u) .and. allocated(visc%Ray_v)) &
         call uvchksum("Ray [uv]", visc%Ray_u, visc%Ray_v, G%HI, haloshift=0, &
@@ -2895,6 +2923,8 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                              ! isopycnal or stacked shallow water mode.
   logical :: use_temperature ! If true, temperature and salinity are used as state variables.
   logical :: use_EOS         ! If true, density calculated from T & S using an equation of state.
+  real :: time_sec
+
   character(len=200) :: filename, tideamp_file ! Input file names or paths
   character(len=80)  :: tideamp_var ! Input file variable names
   ! This include declares and sets the variable "version".
@@ -2909,6 +2939,7 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
   CS%diag => diag
+  time_sec = US%s_to_T*time_type_to_real(Time)
 
   ! Set default, read and log parameters
   call log_version(param_file, mdl, version, "")
@@ -3125,7 +3156,17 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
 
   call get_param(param_file, mdl, "MLE_USE_PBL_MLD", MLE_use_PBL_MLD, &
                  default=.false., do_not_log=.true.)
-
+  call get_param(param_file, mdl, "RAYLEIGH_DRAG_MINRATE", CS%rayleigh_drag_minrate, &
+                 "If > 0, add a Rayleigh drag that increases over timescale"//&
+                 "RAYLEIGH_DRAG_TIME to RAYLEIGH_DRAG_MAXRATE", units = "s-1", default = -1.0)
+  if (CS%rayleigh_drag_minrate > 0) then
+    call get_param(param_file, mdl, "RAYLEIGH_DRAG_MAXRATE", CS%rayleigh_drag_maxrate, &
+                 "Rayleigh drag that increases over timescale RAYLEIGH_DRAG_TIME from "//&
+                 "RAYLEIGH_DRAG_MINRATE to RAYLEIGH_DRAG_MAXRATE", units = "s-1", default = 1.0)
+    call get_param(param_file, mdl, "RAYLEIGH_DRAG_TIME", CS%rayleigh_drag_time, &
+                 "Rayleigh drag that increases over timescale RAYLEIGH_DRAG_TIME from "//&
+                 "RAYLEIGH_DRAG_MINRATE to RAYLEIGH_DRAG_MAXRATE", units = "s", default = 86400.0)
+  endif
   CS%Hbbl = CS%dz_bbl * (US%Z_to_m * GV%m_to_H)  ! Rescaled for use in expressions in thickness units.
 
   if (CS%RiNo_mix .and. kappa_shear_at_vertex(param_file)) then
@@ -3167,13 +3208,17 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
       call pass_var(CS%tideamp,G%domain)
     endif
   endif
-  if (CS%Channel_drag .or. CS%body_force_drag) then
+  if (CS%Channel_drag .or. CS%body_force_drag .or. (CS%rayleigh_drag_minrate > 0)) then
     allocate(visc%Ray_u(IsdB:IedB,jsd:jed,nz), source=0.0)
     allocate(visc%Ray_v(isd:ied,JsdB:JedB,nz), source=0.0)
+    allocate(visc%h_at_vel(IsdB:IedB,jsd:jed,nz), source=0.0)
+
     CS%id_Ray_u = register_diag_field('ocean_model', 'Rayleigh_u', diag%axesCuL, &
        Time, 'Rayleigh drag velocity at u points', 'm s-1', conversion=GV%H_to_m*US%s_to_T)
     CS%id_Ray_v = register_diag_field('ocean_model', 'Rayleigh_v', diag%axesCvL, &
        Time, 'Rayleigh drag velocity at v points', 'm s-1', conversion=GV%H_to_m*US%s_to_T)
+    CS%id_Ray_h = register_diag_field('ocean_model', 'Rayleigh_h', diag%axesCuL, &
+       Time, 'Rayleigh thickness', 'm', conversion=GV%H_to_m)
   endif
 
 
@@ -3206,6 +3251,7 @@ subroutine set_visc_end(visc, CS)
   if (allocated(CS%bbl_v)) deallocate(CS%bbl_v)
   if (allocated(visc%Ray_u)) deallocate(visc%Ray_u)
   if (allocated(visc%Ray_v)) deallocate(visc%Ray_v)
+  if (allocated(visc%h_at_vel)) deallocate (visc%h_at_vel)
   if (allocated(visc%nkml_visc_u)) deallocate(visc%nkml_visc_u)
   if (allocated(visc%nkml_visc_v)) deallocate(visc%nkml_visc_v)
   if (associated(visc%Kd_shear)) deallocate(visc%Kd_shear)
