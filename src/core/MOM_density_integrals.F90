@@ -607,17 +607,27 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       ! weighting.
       ! Note: To work in terrain following coordinates we could offset
       ! this distance by the layer thickness to replicate other models.
-      hWght = massWeightToggle * &
+      hWght = 0
+      hWghtTop = 0
+      if (((e(i+1,j,K)-e(i+1,j,K+1)) < 1.e-6) .or. ((e(i,j,K)-e(i,j,K+1)) < 1.e-6)) then
+        hWght = massWeightToggle * &
               max(0., -bathyT(i,j)-e(i+1,j,K), -bathyT(i+1,j)-e(i,j,K))
       ! CY: The below code just uses top interface, which may be bad in high res open ocean
       ! We want something like if (pa(i+1,k+1)<pa(i,1)) or (pa(i+1,1) <pa(i,k+1)) then...
       ! but pressures are not passed through to this submodule, and tv just has surface press.
       !if ((p(i+1,j,k+1)<p(i,j,1)).or.(tv%p(i+1,j,k+1)<tv%p(i,j,1))) then
-      hWghtTop = TopWeightToggle * &
+        hWghtTop = TopWeightToggle * &
               max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1))
+      !if (((e(i+1,j,1)-e(i+1,j,K+1)) < 1.e-6) .or. ((e(i,j,1)-e(i,j,K+1)) < 1.e-6)) then
+      !  if (hWghtTop <1.e-6) then
+      !    PRINT*,'MWIPG ON','i',i,'j',j, 'corners',e(i,j,K+1),e(i,j,K+1),e(i+1,j,K),e(i+1,j,K+1)
+      !    hWghtTop = max(hWghtTop,1000.)
+      !  endif
+      !endif
       !else ! pressure criteria not activated
       !  hWghtTop = 0.
       !endif
+      endif
       ! Set it to be max of the bottom and top hWghts:
       hWght = max(hWght, hWghtTop)
       if (hWght > 0.) then
@@ -714,18 +724,23 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
     ! weighting.
     ! Note: To work in terrain following coordinates we could offset
     ! this distance by the layer thickness to replicate other models.
-      hWght = massWeightToggle * &
-              max(0., -bathyT(i,j)-e(i,j+1,K), -bathyT(i,j+1)-e(i,j,K))
+      hWght = 0
+      hWghtTop = 0
+
+      if (((e(i,j+1,K)-e(i,j+1,K+1)) < 1.e-6) .or. ((e(i,j,K)-e(i,j,K+1)) < 1.e-6)) then
+       hWght = massWeightToggle * &
+              max(0., -bathyT(i,j)-e(i,j+1,K+1), -bathyT(i,j+1)-e(i,j,K+1))
       ! CY: The below code just uses top interface, which may be bad in high res open ocean
       ! We want something like if (pa(j+1,k+1)<pa(j,1)) or (pa(j+1,1) <pa(i,j,k+1)) then...
       ! but pressures are not passed through to this submodule, and tv just has surface press.
       !if ((p(i,j+1,k+1)<p(i,j,1)).or.(tv%p(i,j+1,k+1)<tv%p(i,j,1))) then
-      hWghtTop = TopWeightToggle * &
+       hWghtTop = TopWeightToggle * &
               max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1))
       !else ! pressure criteria not activated
       !  hWghtTop = 0.
       !endif
       ! Set it to be max of the bottom and top hWghts:
+      endif
       hWght = max(hWght, hWghtTop)
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
@@ -2035,6 +2050,7 @@ subroutine find_depth_of_pressure_in_cell(T_t, T_b, S_t, S_b, z_t, z_b, P_t, P_t
   dp = frac_dp_at_pos(T_t, T_b, S_t, S_b, z_t, z_b, rho_ref, G_e, 1.0, EOS)
 
   P_b = P_t + dp ! Anomalous pressure at bottom of cell
+  PRINT*,'P_t',P_t,'P_b',P_b
 
   if (P_tgt <= P_t ) then
     z_out = z_t
@@ -2150,10 +2166,11 @@ real function frac_dp_at_pos(T_t, T_b, S_t, S_b, z_t, z_b, rho_ref, G_e, pos, EO
     ! Salinity and temperature points are linearly interpolated
     S5(n) = top_weight * S_t + bottom_weight * S_b
     T5(n) = top_weight * T_t + bottom_weight * T_b
-    p5(n) = ( top_weight * z_t + bottom_weight * z_b ) * ( G_e * rho_ref )
+    p5(n) = -( top_weight * z_t + bottom_weight * z_b ) * ( G_e * rho_ref )
   enddo
   call calculate_density(T5, S5, p5, rho5, EOS)
   rho5(:) = rho5(:) !- rho_ref ! Work with anomalies relative to rho_ref
+  PRINT*,'rho5',rho5, 'p5',p5
 
   ! Use Boole's rule to estimate the average density
   rho_ave = C1_90*(7.0*(rho5(1)+rho5(5)) + 32.0*(rho5(2)+rho5(4)) + 12.0*rho5(3))

@@ -90,6 +90,8 @@ type, public :: PressureForce_FV_CS ; private
   integer :: id_p_stanley = -1 !< Diagnostic identifier
   integer :: id_MassWt_u = -1 !< Diagnostic identifier
   integer :: id_MassWt_v = -1 !< Diagnostic identifier
+  integer :: id_reset_u = -1  !< Diagnostic identifier
+  integer :: id_reset_v = -1  !< Diagnistic identifier
   type(SAL_CS), pointer :: SAL_CSp => NULL() !< SAL control structure
   type(tidal_forcing_CS), pointer :: tides_CSp => NULL() !< Tides control structure
 end type PressureForce_FV_CS
@@ -274,7 +276,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
   if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
   endif
-
+ 
   if (use_p_atm) then
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -929,6 +931,10 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     MassWt_u    ! The fractional mass weighting at a u-point [nondim].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
     MassWt_v    ! The fractional mass weighting at a v-point [nondim].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)):: &
+    reset_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    reset_v
   real, dimension(SZI_(G),SZJ_(G)) :: &
     T_top, &    ! Temperature of top layer used with correction_intxpa [C ~> degC]
     S_top, &    ! Salinity of top layer used with correction_intxpa [S ~> ppt]
@@ -1002,6 +1008,9 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
   endif
+  if ((CS%id_reset_u > 0) .or. (CS%id_reset_v > 0)) then
+    reset_u(:,:,:) = 0.0; reset_v(:,:,:) = 0.0
+  endif 
 
   if (CS%tides_answer_date>20230630) then
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -1430,8 +1439,10 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       do j=js,je ; do I=Isq,Ieq ; if (seek_x_cor(I,j)) then
         ! Find the topmost layer for which both sides are nonvanished and mass-weighting is not
         ! activated in the subgrid interpolation.
-        if (((h(i,j,k) > CS%h_nonvanished) .and. (h(i+1,j,k) > CS%h_nonvanished)) .and. &
-            (max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1)) <= 0.0)) then
+!        if (((h(i,j,k) > CS%h_nonvanished) .and. (h(i+1,j,k) > CS%h_nonvanished)) .and. &
+!            (max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1)) <= 0.0)) then
+        if (((h(i,j,k) > CS%h_nonvanished) .and. (h(i+1,j,k) > CS%h_nonvanished))) then
+!CY            (max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1)) <= 0.0)) then
           ! Store properties at the bottom of this cell to get a "good estimate" for intxpa at
           ! the interface below this cell (it might have quadratic pressure dependence if sloped)
           T_int_W(I,j) = T_b(i,j,k) ; T_int_E(I,j) = T_b(i+1,j,k)
@@ -1444,6 +1455,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
           intx_pa_nonlin(I,j) = intx_pa(I,j,K+1) - 0.5*(pa(i,j,K+1) + pa(i+1,j,K+1))
           dgeo_x(I,j) = GV%g_Earth * (e(i+1,j,K+1)-e(i,j,K+1))
           seek_x_cor(I,j) = .false.
+          reset_u(I,j,k) = 1 
         else
           do_more_k = .true.
         endif
@@ -1461,6 +1473,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
         intx_pa_nonlin(I,j) = intx_pa(I,j,1) - 0.5*(pa(i,j,1) + pa(i+1,j,1))
         dgeo_x(I,j) = GV%g_Earth * (e(i+1,j,1)-e(i,j,1))
         seek_x_cor(I,j) = .false.
+        reset_u(I,j,1) = 2
       endif ; enddo ; enddo
     endif
 
@@ -1512,8 +1525,10 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       do J=Jsq,Jeq ; do i=is,ie ; if (seek_y_cor(i,J)) then
         ! Find the topmost layer for which both sides are nonvanished and mass-weighting is not
         ! activated in the subgrid interpolation.
-        if (((h(i,j,k) > CS%h_nonvanished) .and. (h(i,j+1,k) > CS%h_nonvanished)) .and. &
-            (max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1)) <= 0.0)) then
+!        if (((h(i,j,k) > CS%h_nonvanished) .and. (h(i,j+1,k) > CS%h_nonvanished)) .and. &
+!            (max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1)) <= 0.0)) then
+        if (((h(i,j,k) > CS%h_nonvanished) .and. (h(i,j+1,k) > CS%h_nonvanished))) then
+!CY            (max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1)) <= 0.0)) then
           ! Store properties at the bottom of this cell to get a "good estimate" for intypa at
           ! the interface below this cell (it might have quadratic pressure dependence if sloped)
           T_int_S(i,J) = T_b(i,j,k) ; T_int_N(i,J) = T_b(i,j+1,k)
@@ -1525,6 +1540,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
           inty_pa_nonlin(i,J) = inty_pa(i,J,K+1) - 0.5*(pa(i,j,K+1) + pa(i,j+1,K+1))
           dgeo_y(i,J) = GV%g_Earth * (e(i,j+1,K+1)-e(i,j,K+1))
           seek_y_cor(i,J) = .false.
+          reset_v(i,J,k) = 1
         else
           do_more_k = .true.
         endif
@@ -1542,6 +1558,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
         inty_pa_nonlin(i,J) = inty_pa(i,J,1) - 0.5*(pa(i,j,1) + pa(i,j+1,1))
         dgeo_y(i,J) = GV%g_Earth * (e(i,j+1,1)-e(i,j,1))
         seek_y_cor(i,J) = .false.
+        reset_v(i,J,1) = 2
       endif ; enddo ; enddo
     endif
 
@@ -1717,6 +1734,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
   if (CS%id_MassWt_u>0) call post_data(CS%id_MassWt_u, MassWt_u, CS%diag)
   if (CS%id_MassWt_v>0) call post_data(CS%id_MassWt_v, MassWt_v, CS%diag)
+  if (CS%id_reset_u>0) call post_data(CS%id_reset_u, reset_u, CS%diag)
+  if (CS%id_reset_v>0) call post_data(CS%id_reset_v, reset_v, CS%diag)
 
   if (CS%id_rho_pgf>0) call post_data(CS%id_rho_pgf, rho_pgf, CS%diag)
   if (CS%id_rho_stanley_pgf>0) call post_data(CS%id_rho_stanley_pgf, rho_stanley_pgf, CS%diag)
@@ -1890,6 +1909,11 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
         'The fractional mass weighting at u-point PGF calculations', 'nondim')
   CS%id_MassWt_v = register_diag_field('ocean_model', 'MassWt_v', diag%axesCvL, Time, &
         'The fractional mass weighting at v-point PGF calculations', 'nondim')
+  !CY diags
+  CS%id_reset_u = register_diag_field('ocean_model', 'reset_u', diag%axesCuL, Time, &
+        'Layer for which bottom is the reset integral position for u PGF', 'nondim')
+  CS%id_reset_v = register_diag_field('ocean_model', 'reset_v', diag%axesCvL, Time, &
+        'Layer for which bottom is the reset integral position for v PGF', 'nondim')
 
   CS%GFS_scale = 1.0
   if (GV%g_prime(1) /= GV%g_Earth) CS%GFS_scale = GV%g_prime(1) / GV%g_Earth
