@@ -877,7 +877,8 @@ end subroutine int_density_dz_generic_plm
 !! are parabolic profiles
 subroutine int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
                                       rho_ref, rho_0, G_e, dz_subroundoff, bathyT, HI, GV, EOS, US, use_stanley_eos, &
-                                      dpa, intz_dpa, intx_dpa, inty_dpa, MassWghtInterp, Z_0p, MassWghtInterpVanOnly, h_nv)
+                                      dpa, intz_dpa, intx_dpa, inty_dpa, MassWghtInterp, Z_0p, &
+                                      MassWghtInterpVanOnly, h_nv)
   integer,              intent(in)  :: k   !< Layer index to calculate integrals for
   type(hor_index_type), intent(in)  :: HI  !< Ocean horizontal index structures for the input arrays
   type(verticalGrid_type), intent(in) :: GV !< Vertical grid structure
@@ -2157,7 +2158,7 @@ subroutine diagnose_mass_weight_p(p_t, p_b, bathyP, P_surf, dP_neglect, MassWght
     if (top_massWeight) &
       hWght = max(hWght, P_surf(i,j)-p_b(i,j+1), P_surf(i,j+1)-p_b(i,j))
     ! If both sides are nonvanished, then set it back to zero.
-    if (((p_b(i,j) - p_t(i,j)) > p_nonvanished) .and. ((p_b(i,j+1) - p_t(i,j+1)) > p_nonvanished)) then 
+    if (((p_b(i,j) - p_t(i,j)) > p_nonvanished) .and. ((p_b(i,j+1) - p_t(i,j+1)) > p_nonvanished)) then
       hWght = massWeightNVonlyToggle * hWght
     endif
     if (hWght > 0.) then
