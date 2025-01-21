@@ -389,7 +389,7 @@ end subroutine int_density_dz_generic_pcm
 !! T and S are linear profiles.
 subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
                                       rho_0, G_e, dz_subroundoff, bathyT, HI, GV, EOS, US, use_stanley_eos, dpa, &
-                                      intz_dpa, intx_dpa, inty_dpa, MassWghtInterp, &
+                                      intz_dpa, intx_dpa, inty_dpa,intx_dpa_MWIPG,inty_dpa_MWIPG, MassWghtInterp, &
                                       use_inaccurate_form, Z_0p)
   integer,              intent(in)  :: k   !< Layer index to calculate integrals for
   type(hor_index_type), intent(in)  :: HI  !< Ocean horizontal index structures for the input arrays
@@ -426,10 +426,20 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
               optional, intent(inout) :: intx_dpa !< The integral in x of the difference between the
                                            !! pressure anomaly at the top and bottom of the layer
                                            !! divided by the x grid spacing [R L2 T-2 ~> Pa]
+  real, dimension(SZIB_(HI),SZJ_(HI)), &
+              optional, intent(inout) :: intx_dpa_MWIPG !< The integral in x of the difference between the
+                                           !! pressure anomaly at the top and bottom of the layer
+                                           !! divided by the x grid spacing [R L2 T-2 ~> Pa]
+
   real, dimension(SZI_(HI),SZJB_(HI)), &
               optional, intent(inout) :: inty_dpa !< The integral in y of the difference between the
                                            !! pressure anomaly at the top and bottom of the layer
                                            !! divided by the y grid spacing [R L2 T-2 ~> Pa]
+  real, dimension(SZI_(HI),SZJB_(HI)), &
+              optional, intent(inout) :: inty_dpa_MWIPG !< The integral in y of the difference between the
+                                           !! pressure anomaly at the top and bottom of the layer
+                                           !! divided by the y grid spacing [R L2 T-2 ~> Pa]
+
   integer,    optional, intent(in)  :: MassWghtInterp !< A flag indicating whether and how to use
                                            !! mass weighting to interpolate T/S in integrals
   logical,    optional, intent(in)  :: use_inaccurate_form !< If true, uses an inaccurate form of
@@ -630,6 +640,7 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       endif
       ! Set it to be max of the bottom and top hWghts:
       hWght = max(hWght, hWghtTop)
+      hWght = 0
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
         hR = (e(i+1,j,K) - e(i+1,j,K+1)) + dz_subroundoff
@@ -742,6 +753,7 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       ! Set it to be max of the bottom and top hWghts:
       endif
       hWght = max(hWght, hWghtTop)
+      hWght = 0
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
         hR = (e(i,j+1,K) - e(i,j+1,K+1)) + dz_subroundoff
@@ -831,6 +843,242 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
                              12.0*intz(3))
     enddo
   enddo ; endif
+
+  ! 2. Compute horizontal integrals in the x direction
+  if (present(intx_dpa_MWIPG)) then ; do j=HI%jsc,HI%jec
+    do I=Isq,Ieq
+      ! Corner values of T and S
+      ! hWght is the distance measure by which the cell is violation of
+      ! hydrostatic consistency. For large hWght we bias the interpolation
+      ! of T,S along the top and bottom integrals, almost like thickness
+      ! weighting.
+      ! Note: To work in terrain following coordinates we could offset
+      ! this distance by the layer thickness to replicate other models.
+      hWght = 0
+      hWghtTop = 0
+      if (((e(i+1,j,K)-e(i+1,j,K+1)) < 1.e-6) .or. ((e(i,j,K)-e(i,j,K+1)) < 1.e-6)) then
+        hWght = massWeightToggle * &
+              max(0., -bathyT(i,j)-e(i+1,j,K), -bathyT(i+1,j)-e(i,j,K))
+      ! CY: The below code just uses top interface, which may be bad in high res open ocean
+      ! We want something like if (pa(i+1,k+1)<pa(i,1)) or (pa(i+1,1) <pa(i,k+1)) then...
+      ! but pressures are not passed through to this submodule, and tv just has surface press.
+      !if ((p(i+1,j,k+1)<p(i,j,1)).or.(tv%p(i+1,j,k+1)<tv%p(i,j,1))) then
+        hWghtTop = TopWeightToggle * &
+              max(0., e(i+1,j,K+1)-e(i,j,1), e(i,j,K+1)-e(i+1,j,1))
+      !if (((e(i+1,j,1)-e(i+1,j,K+1)) < 1.e-6) .or. ((e(i,j,1)-e(i,j,K+1)) < 1.e-6)) then
+      !  if (hWghtTop <1.e-6) then
+      !    PRINT*,'MWIPG ON','i',i,'j',j, 'corners',e(i,j,K+1),e(i,j,K+1),e(i+1,j,K),e(i+1,j,K+1)
+      !    hWghtTop = max(hWghtTop,1000.)
+      !  endif
+      !endif
+      !else ! pressure criteria not activated
+      !  hWghtTop = 0.
+      !endif
+      endif
+      ! Set it to be max of the bottom and top hWghts:
+      hWght = max(hWght, hWghtTop)
+      if (hWght > 0.) then
+        hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
+        hR = (e(i+1,j,K) - e(i+1,j,K+1)) + dz_subroundoff
+        hWght = hWght * ( (hL-hR)/(hL+hR) )**2
+        iDenom = 1./( hWght*(hR + hL) + hL*hR )
+        Ttl = ( (hWght*hR)*T_t(i+1,j,k) + (hWght*hL + hR*hL)*T_t(i,j,k) ) * iDenom
+        Ttr = ( (hWght*hL)*T_t(i,j,k) + (hWght*hR + hR*hL)*T_t(i+1,j,k) ) * iDenom
+        Tbl = ( (hWght*hR)*T_b(i+1,j,k) + (hWght*hL + hR*hL)*T_b(i,j,k) ) * iDenom
+        Tbr = ( (hWght*hL)*T_b(i,j,k) + (hWght*hR + hR*hL)*T_b(i+1,j,k) ) * iDenom
+        Stl = ( (hWght*hR)*S_t(i+1,j,k) + (hWght*hL + hR*hL)*S_t(i,j,k) ) * iDenom
+        Str = ( (hWght*hL)*S_t(i,j,k) + (hWght*hR + hR*hL)*S_t(i+1,j,k) ) * iDenom
+        Sbl = ( (hWght*hR)*S_b(i+1,j,k) + (hWght*hL + hR*hL)*S_b(i,j,k) ) * iDenom
+        Sbr = ( (hWght*hL)*S_b(i,j,k) + (hWght*hR + hR*hL)*S_b(i+1,j,k) ) * iDenom
+      else
+        Ttl = T_t(i,j,k); Tbl = T_b(i,j,k); Ttr = T_t(i+1,j,k); Tbr = T_b(i+1,j,k)
+        Stl = S_t(i,j,k); Sbl = S_b(i,j,k); Str = S_t(i+1,j,k); Sbr = S_b(i+1,j,k)
+      endif
+
+      do m=2,4
+        w_left = wt_t(m) ; w_right = wt_b(m)
+        dz_x(m,i) = (w_left*(e(i,j,K) - e(i,j,K+1))) + (w_right*(e(i+1,j,K) - e(i+1,j,K+1)))
+
+        ! Salinity and temperature points are linearly interpolated in
+        ! the horizontal. The subscript (1) refers to the top value in
+        ! the vertical profile while subscript (5) refers to the bottom
+        ! value in the vertical profile.
+        pos = i*15+(m-2)*5
+        T15(pos+1) = (w_left*Ttl) + (w_right*Ttr)
+        T15(pos+5) = (w_left*Tbl) + (w_right*Tbr)
+
+        S15(pos+1) = (w_left*Stl) + (w_right*Str)
+        S15(pos+5) = (w_left*Sbl) + (w_right*Sbr)
+
+        p15(pos+1) = -GxRho * ((w_left*(e(i,j,K)-z0pres(i,j))) + (w_right*(e(i+1,j,K)-z0pres(i+1,j))))
+
+        ! Pressure
+        do n=2,5
+          p15(pos+n) = p15(pos+n-1) + GxRho*0.25*dz_x(m,i)
+        enddo
+
+        ! Salinity and temperature (linear interpolation in the vertical)
+        do n=2,4
+          S15(pos+n) = wt_t(n) * S15(pos+1) + wt_b(n) * S15(pos+5)
+          T15(pos+n) = wt_t(n) * T15(pos+1) + wt_b(n) * T15(pos+5)
+        enddo
+        if (use_varT) T215(pos+1:pos+5) = (w_left*tv%varT(i,j,k)) + (w_right*tv%varT(i+1,j,k))
+        if (use_covarTS) TS15(pos+1:pos+5) = (w_left*tv%covarTS(i,j,k)) + (w_right*tv%covarTS(i+1,j,k))
+        if (use_varS) S215(pos+1:pos+5) = (w_left*tv%varS(i,j,k)) + (w_right*tv%varS(i+1,j,k))
+      enddo
+    enddo
+
+    if (use_stanley_eos) then
+      call calculate_density(T15, S15, p15, T215, TS15, S215, r15, EOS, EOSdom_q15, rho_ref=rho_ref)
+    else
+      if (use_rho_ref) then
+        call calculate_density(T15, S15, p15, r15, EOS, EOSdom_q15, rho_ref=rho_ref)
+      else
+        call calculate_density(T15, S15, p15, r15, EOS, EOSdom_q15)
+      endif
+    endif
+
+    do I=Isq,Ieq
+      intz(1) = dpa(i,j) ; intz(5) = dpa(i+1,j)
+
+      ! Use Boole's rule to estimate the pressure anomaly change.
+      if (use_rho_ref) then
+        do m = 2,4
+          pos = i*15+(m-2)*5
+          intz(m) = (G_e*dz_x(m,i)*( C1_90*(7.0*(r15(pos+1)+r15(pos+5)) + 32.0*(r15(pos+2)+r15(pos+4)) + &
+                            12.0*r15(pos+3)) ))
+        enddo
+      else
+        do m = 2,4
+          pos = i*15+(m-2)*5
+          intz(m) = (G_e*dz_x(m,i)*( C1_90*(7.0*(r15(pos+1)+r15(pos+5)) + 32.0*(r15(pos+2)+r15(pos+4)) + &
+                            12.0*r15(pos+3)) - rho_ref ))
+        enddo
+      endif
+      ! Use Boole's rule to integrate the bottom pressure anomaly values in x.
+      intx_dpa_MWIPG(I,j) = C1_90*(7.0*(intz(1)+intz(5)) + 32.0*(intz(2)+intz(4)) + &
+                             12.0*intz(3))
+    enddo
+  enddo ; endif
+
+  ! 3. Compute horizontal integrals in the y direction
+  if (present(inty_dpa_MWIPG)) then ; do J=Jsq,Jeq
+    do i=HI%isc,HI%iec
+    ! Corner values of T and S
+    ! hWght is the distance measure by which the cell is violation of
+    ! hydrostatic consistency. For large hWght we bias the interpolation
+    ! of T,S along the top and bottom integrals, almost like thickness
+    ! weighting.
+    ! Note: To work in terrain following coordinates we could offset
+    ! this distance by the layer thickness to replicate other models.
+      hWght = 0
+      hWghtTop = 0
+
+      if (((e(i,j+1,K)-e(i,j+1,K+1)) < 1.e-6) .or. ((e(i,j,K)-e(i,j,K+1)) < 1.e-6)) then
+       hWght = massWeightToggle * &
+              max(0., -bathyT(i,j)-e(i,j+1,K+1), -bathyT(i,j+1)-e(i,j,K+1))
+      ! CY: The below code just uses top interface, which may be bad in high res open ocean
+      ! We want something like if (pa(j+1,k+1)<pa(j,1)) or (pa(j+1,1) <pa(i,j,k+1)) then...
+      ! but pressures are not passed through to this submodule, and tv just has surface press.
+      !if ((p(i,j+1,k+1)<p(i,j,1)).or.(tv%p(i,j+1,k+1)<tv%p(i,j,1))) then
+       hWghtTop = TopWeightToggle * &
+              max(0., e(i,j+1,K+1)-e(i,j,1), e(i,j,K+1)-e(i,j+1,1))
+      !else ! pressure criteria not activated
+      !  hWghtTop = 0.
+      !endif
+      ! Set it to be max of the bottom and top hWghts:
+      endif
+      hWght = max(hWght, hWghtTop)
+      if (hWght > 0.) then
+        hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
+        hR = (e(i,j+1,K) - e(i,j+1,K+1)) + dz_subroundoff
+        hWght = hWght * ( (hL-hR)/(hL+hR) )**2
+        iDenom = 1./( hWght*(hR + hL) + hL*hR )
+        Ttl = ( (hWght*hR)*T_t(i,j+1,k) + (hWght*hL + hR*hL)*T_t(i,j,k) ) * iDenom
+        Ttr = ( (hWght*hL)*T_t(i,j,k) + (hWght*hR + hR*hL)*T_t(i,j+1,k) ) * iDenom
+        Tbl = ( (hWght*hR)*T_b(i,j+1,k) + (hWght*hL + hR*hL)*T_b(i,j,k) ) * iDenom
+        Tbr = ( (hWght*hL)*T_b(i,j,k) + (hWght*hR + hR*hL)*T_b(i,j+1,k) ) * iDenom
+        Stl = ( (hWght*hR)*S_t(i,j+1,k) + (hWght*hL + hR*hL)*S_t(i,j,k) ) * iDenom
+        Str = ( (hWght*hL)*S_t(i,j,k) + (hWght*hR + hR*hL)*S_t(i,j+1,k) ) * iDenom
+        Sbl = ( (hWght*hR)*S_b(i,j+1,k) + (hWght*hL + hR*hL)*S_b(i,j,k) ) * iDenom
+        Sbr = ( (hWght*hL)*S_b(i,j,k) + (hWght*hR + hR*hL)*S_b(i,j+1,k) ) * iDenom
+      else
+        Ttl = T_t(i,j,k); Tbl = T_b(i,j,k); Ttr = T_t(i,j+1,k); Tbr = T_b(i,j+1,k)
+        Stl = S_t(i,j,k); Sbl = S_b(i,j,k); Str = S_t(i,j+1,k); Sbr = S_b(i,j+1,k)
+      endif
+
+      do m=2,4
+        w_left = wt_t(m) ; w_right = wt_b(m)
+        dz_y(m,i) = (w_left*(e(i,j,K) - e(i,j,K+1))) + (w_right*(e(i,j+1,K) - e(i,j+1,K+1)))
+
+        ! Salinity and temperature points are linearly interpolated in
+        ! the horizontal. The subscript (1) refers to the top value in
+        ! the vertical profile while subscript (5) refers to the bottom
+        ! value in the vertical profile.
+        pos = i*15+(m-2)*5
+        T15(pos+1) = (w_left*Ttl) + (w_right*Ttr)
+        T15(pos+5) = (w_left*Tbl) + (w_right*Tbr)
+
+        S15(pos+1) = (w_left*Stl) + (w_right*Str)
+        S15(pos+5) = (w_left*Sbl) + (w_right*Sbr)
+
+        p15(pos+1) = -GxRho * ((w_left*(e(i,j,K)-z0pres(i,j))) + (w_right*(e(i,j+1,K)-z0pres(i,j+1))))
+
+        ! Pressure
+        do n=2,5
+          p15(pos+n) = p15(pos+n-1) + GxRho*0.25*dz_y(m,i)
+        enddo
+
+        ! Salinity and temperature (linear interpolation in the vertical)
+        do n=2,4
+          S15(pos+n) = wt_t(n) * S15(pos+1) + wt_b(n) * S15(pos+5)
+          T15(pos+n) = wt_t(n) * T15(pos+1) + wt_b(n) * T15(pos+5)
+        enddo
+        if (use_varT) T215(pos+1:pos+5) = (w_left*tv%varT(i,j,k)) + (w_right*tv%varT(i,j+1,k))
+        if (use_covarTS) TS15(pos+1:pos+5) = (w_left*tv%covarTS(i,j,k)) + (w_right*tv%covarTS(i,j+1,k))
+        if (use_varS) S215(pos+1:pos+5) = (w_left*tv%varS(i,j,k)) + (w_right*tv%varS(i,j+1,k))
+      enddo
+    enddo
+
+    if (use_stanley_eos) then
+      call calculate_density(T15(15*HI%isc+1:), S15(15*HI%isc+1:), p15(15*HI%isc+1:), &
+                             T215(15*HI%isc+1:), TS15(15*HI%isc+1:), S215(15*HI%isc+1:), &
+                             r15(15*HI%isc+1:), EOS, EOSdom_h15, rho_ref=rho_ref)
+    else
+      if (use_rho_ref) then
+        call calculate_density(T15(15*HI%isc+1:), S15(15*HI%isc+1:), p15(15*HI%isc+1:), &
+                               r15(15*HI%isc+1:), EOS, EOSdom_h15, rho_ref=rho_ref)
+      else
+        call calculate_density(T15(15*HI%isc+1:), S15(15*HI%isc+1:), p15(15*HI%isc+1:), &
+                               r15(15*HI%isc+1:), EOS, EOSdom_h15)
+      endif
+    endif
+
+    do i=HI%isc,HI%iec
+      intz(1) = dpa(i,j) ; intz(5) = dpa(i,j+1)
+
+      ! Use Boole's rule to estimate the pressure anomaly change.
+      if (use_rho_ref) then
+        do m = 2,4
+          pos = i*15+(m-2)*5
+          intz(m) = (G_e*dz_y(m,i)*( C1_90*(7.0*(r15(pos+1)+r15(pos+5)) + &
+                                           32.0*(r15(pos+2)+r15(pos+4)) + &
+                                           12.0*r15(pos+3)) ))
+        enddo
+      else
+        do m = 2,4
+          pos = i*15+(m-2)*5
+          intz(m) = (G_e*dz_y(m,i)*( C1_90*(7.0*(r15(pos+1)+r15(pos+5)) + &
+                                           32.0*(r15(pos+2)+r15(pos+4)) + &
+                                           12.0*r15(pos+3)) - rho_ref ))
+        enddo
+      endif
+      ! Use Boole's rule to integrate the values.
+      inty_dpa_MWIPG(i,J) = C1_90*(7.0*(intz(1)+intz(5)) + 32.0*(intz(2)+intz(4)) + &
+                             12.0*intz(3))
+    enddo
+  enddo ; endif
+
 
 end subroutine int_density_dz_generic_plm
 

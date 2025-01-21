@@ -875,12 +875,14 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     intx_pa     ! The zonal integral of the pressure anomaly along the interface
                 ! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
-    intx_dpa    ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+    intx_dpa, &    ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+    intx_dpa_MWIPG ! As above but with MWIPG possibly activated
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1) :: &
     inty_pa     ! The meridional integral of the pressure anomaly along the
                 ! interface atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
-    inty_dpa    ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+    inty_dpa, &    ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+    inty_dpa_MWIPG
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     intx_pa_cor ! Correction for curvature in intx_pa [R L2 T-2 ~> Pa]
   real, dimension(SZI_(G),SZJB_(G)) :: &
@@ -1181,7 +1183,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
           call int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa(:,:,k), intz_dpa(:,:,k), &
-                    intx_dpa(:,:,k), inty_dpa(:,:,k), &
+                    intx_dpa(:,:,k), inty_dpa(:,:,k), intx_dpa_MWIPG(:,:,k), inty_dpa_MWIPG(:,:,k), &
                     MassWghtInterp=CS%MassWghtInterp, &
                     use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p)
         elseif ( CS%Recon_Scheme == 2 ) then
@@ -1600,7 +1602,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     PFu(I,j,k) = (((pa(i,j,K)*h(i,j,k) + intz_dpa(i,j,k)) - &
                    (pa(i+1,j,K)*h(i+1,j,k) + intz_dpa(i+1,j,k))) + &
                   ((h(i+1,j,k) - h(i,j,k)) * intx_pa(I,j,K) - &
-                   (e(i+1,j,K+1) - e(i,j,K+1)) * intx_dpa(I,j,k) * GV%Z_to_H)) * &
+                   (e(i+1,j,K+1) - e(i,j,K+1)) * intx_dpa_MWIPG(I,j,k) * GV%Z_to_H)) * &
                  ((2.0*I_Rho0*G%IdxCu(I,j)) / &
                   ((h(i,j,k) + h(i+1,j,k)) + h_neglect))
   enddo ; enddo ; enddo
@@ -1611,7 +1613,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     PFv(i,J,k) = (((pa(i,j,K)*h(i,j,k) + intz_dpa(i,j,k)) - &
                    (pa(i,j+1,K)*h(i,j+1,k) + intz_dpa(i,j+1,k))) + &
                   ((h(i,j+1,k) - h(i,j,k)) * inty_pa(i,J,K) - &
-                   (e(i,j+1,K+1) - e(i,j,K+1)) * inty_dpa(i,J,k) * GV%Z_to_H)) * &
+                   (e(i,j+1,K+1) - e(i,j,K+1)) * inty_dpa_MWIPG(i,J,k) * GV%Z_to_H)) * &
                  ((2.0*I_Rho0*G%IdyCv(i,J)) / &
                   ((h(i,j,k) + h(i,j+1,k)) + h_neglect))
   enddo ; enddo ; enddo
