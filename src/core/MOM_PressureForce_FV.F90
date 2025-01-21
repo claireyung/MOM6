@@ -59,6 +59,7 @@ type, public :: PressureForce_FV_CS ; private
   logical :: reset_intxpa_integral !< If true and the surface displacement between adjacent cells
                             !! exceeds the vertical grid spacing, reset intxpa at the interface below
                             !! a trusted interior cell.  (This often applies in ice shelf cavities.)
+  logical :: MassWghtInterpVanOnly !< If true, don't do mass weighting of T/S interpolation unless vanished
   real    :: h_nonvanished  !< A minimal layer thickness that indicates that a layer is thick enough
                             !! to usefully reestimate the pressure integral across the interface
                             !! below it [H ~> m or kg m-2]
@@ -224,6 +225,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
 
   real :: dp_neglect         ! A thickness that is so small it is usually lost
                              ! in roundoff and can be neglected [R L2 T-2 ~> Pa].
+  real :: p_nonvanished      ! nonvanshed pressure [R L2 T-2 ~> Pa]
   real :: I_gEarth           ! The inverse of GV%g_Earth [T2 Z L-2 ~> s2 m-1]
   real :: alpha_anom         ! The in-situ specific volume, averaged over a
                              ! layer, less alpha_ref [R-1 ~> m3 kg-1].
@@ -278,6 +280,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
   dp_neglect = GV%g_Earth*GV%H_to_RZ * GV%H_subroundoff
   alpha_ref = 1.0 / CS%Rho0
   I_gEarth = 1.0 / GV%g_Earth
+  p_nonvanished = GV%g_Earth*CS%Rho0*CS%h_nonvanished
 
   if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
@@ -354,7 +357,8 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
           call int_spec_vol_dp_generic_plm( T_t(:,:,k), T_b(:,:,k), S_t(:,:,k), S_b(:,:,k), &
                     p(:,:,K), p(:,:,K+1), alpha_ref, dp_neglect, p(:,:,nz+1), G%HI, &
                     tv%eqn_of_state, US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), inty_dza(:,:,k), &
-                    P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp)
+                    P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp, &
+                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
         elseif ( CS%Recon_Scheme == 2 ) then
           call MOM_error(FATAL, "PressureForce_FV_nonBouss: "//&
                          "int_spec_vol_dp_generic_ppm does not exist yet.")
@@ -368,11 +372,13 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
                                p(:,:,K+1), alpha_ref, G%HI, tv%eqn_of_state, &
                                US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), &
                                inty_dza(:,:,k), bathyP=p(:,:,nz+1), P_surf=p(:,:,1), dP_tiny=dp_neglect, &
-                               MassWghtInterp=CS%MassWghtInterp)
+                               MassWghtInterp=CS%MassWghtInterp, &
+                               MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
       endif
       if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) &
         call diagnose_mass_weight_p(p(:,:,K), p(:,:,K+1), p(:,:,nz+1), p(:,:,1), dp_neglect, CS%MassWghtInterp, &
-                                    G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k))
+                                    G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
+                                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
     else
       alpha_anom = 1.0 / GV%Rlay(k) - alpha_ref
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -1173,19 +1179,22 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa(:,:,k), intz_dpa(:,:,k), &
                     intx_dpa(:,:,k), inty_dpa(:,:,k), &
                     MassWghtInterp=CS%MassWghtInterp, &
-                    use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p)
+                    use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p, &
+                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
         elseif ( CS%Recon_Scheme == 2 ) then
           call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa(:,:,k), intz_dpa(:,:,k), &
                     intx_dpa(:,:,k), inty_dpa(:,:,k), &
-                    MassWghtInterp=CS%MassWghtInterp, Z_0p=Z_0p)
+                    MassWghtInterp=CS%MassWghtInterp, Z_0p=Z_0p, &
+                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
         endif
       else
         call int_density_dz(tv_tmp%T(:,:,k), tv_tmp%S(:,:,k), e(:,:,K), e(:,:,K+1), &
                   rho_ref, CS%Rho0, GV%g_Earth, G%HI, tv%eqn_of_state, US, dpa(:,:,k), &
                   intz_dpa(:,:,k), intx_dpa(:,:,k), inty_dpa(:,:,k), G%bathyT, e(:,:,1), dz_neglect, &
-                  CS%MassWghtInterp, Z_0p=Z_0p)
+                  CS%MassWghtInterp, Z_0p=Z_0p, &
+                  MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
       endif
       if (GV%Z_to_H /= 1.0) then
         !$OMP parallel do default(shared)
@@ -1195,7 +1204,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
       endif
       if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) &
         call diagnose_mass_weight_Z(e(:,:,K), e(:,:,K+1), G%bathyT, e(:,:,1), dz_neglect, CS%MassWghtInterp, &
-                                    G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k))
+                                    G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
+                                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
     else
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -1806,6 +1816,7 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
   logical :: useMassWghtInterp ! If true, use near-bottom mass weighting for T and S
   logical :: MassWghtInterpTop ! If true, use near-surface mass weighting for T and S under ice shelves
   logical :: MassWghtInterp_NonBous_bug ! If true, use a buggy mass weighting when non-Boussinesq
+  logical :: MassWghtInterpVanOnly ! If true, turn of mass weighting unless one side is vanished
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl  ! This module's name.
@@ -1888,6 +1899,11 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp,
                  "when interpolating T/S for integrals near the bathymetry in FV pressure "//&
                  "gradient calculations.", &
                  default=.false., do_not_log=(GV%Boussinesq .or. (.not.useMassWghtInterp)))
+  call get_param(param_file, mdl, "MASS_WEIGHT_IN_PGF_VANISHED_ONLY", CS%MassWghtInterpVanOnly, &
+                 "If true, use mass weighting when interpolating T/S for integrals "//&
+                 "only if one side is vanished according to RESET_INTXPA_H_NONVANISHED. ", &
+                 default=.false.)
+
   CS%MassWghtInterp = 0
   if (useMassWghtInterp) &
     CS%MassWghtInterp = ibset(CS%MassWghtInterp, 0) ! Same as CS%MassWghtInterp + 1
