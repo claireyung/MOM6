@@ -102,6 +102,8 @@ type, public :: PressureForce_FV_CS ; private
   integer :: id_sal_v = -1 !< Diagnostic identifier
   integer :: id_tides_u = -1 !< Diagnostic identifier
   integer :: id_tides_v = -1 !< Diagnostic identifier
+  integer :: id_reset_u = -1  !< Diagnostic identifier
+  integer :: id_reset_v = -1  !< Diagnistic identifier
   type(SAL_CS), pointer :: SAL_CSp => NULL() !< SAL control structure
   type(tidal_forcing_CS), pointer :: tides_CSp => NULL() !< Tides control structure
 end type PressureForce_FV_CS
@@ -1056,6 +1058,10 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
     MassWt_u    ! The fractional mass weighting at a u-point [nondim].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
     MassWt_v    ! The fractional mass weighting at a v-point [nondim].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)):: &
+    reset_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    reset_v
   real, dimension(SZI_(G),SZJ_(G)) :: &
     T_top, &    ! Temperature of top layer used with correction_intxpa [C ~> degC]
     S_top, &    ! Salinity of top layer used with correction_intxpa [S ~> ppt]
@@ -1146,7 +1152,9 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
   if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
   endif
-
+  if ((CS%id_reset_u > 0) .or. (CS%id_reset_v > 0)) then
+    reset_u(:,:,:) = 0.0; reset_v(:,:,:) = 0.0
+  endif 
   do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
     e(i,j,nz+1) = -G%bathyT(i,j)
   enddo ; enddo
@@ -1602,6 +1610,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
           intx_pa_nonlin(I,j) = intx_pa(I,j,K+1) - 0.5*(pa(i,j,K+1) + pa(i+1,j,K+1))
           dgeo_x(I,j) = GV%g_Earth * (e(i+1,j,K+1)-e(i,j,K+1))
           seek_x_cor(I,j) = .false.
+          reset_u(I,j,k) = 1 
         else
           do_more_k = .true.
         endif
@@ -1634,6 +1643,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
             endif
           enddo
           seek_x_cor(I,j) = .false.
+          reset_u(I,j,1) = 2
         endif ; enddo ; enddo
       else
         ! There are still points where a correction is needed, so use the top interface for lack of a better idea?
@@ -1645,6 +1655,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
           intx_pa_nonlin(I,j) = intx_pa(I,j,1) - 0.5*(pa(i,j,1) + pa(i+1,j,1))
           dgeo_x(I,j) = GV%g_Earth * (e(i+1,j,1)-e(i,j,1))
           seek_x_cor(I,j) = .false.
+          reset_u(I,j,1) = 2
         endif ; enddo ; enddo
       endif
     endif
@@ -1711,6 +1722,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
           inty_pa_nonlin(i,J) = inty_pa(i,J,K+1) - 0.5*(pa(i,j,K+1) + pa(i,j+1,K+1))
           dgeo_y(i,J) = GV%g_Earth * (e(i,j+1,K+1)-e(i,j,K+1))
           seek_y_cor(i,J) = .false.
+          reset_v(i,J,k) = 1
         else
           do_more_k = .true.
         endif
@@ -1743,6 +1755,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
             endif
           enddo
           seek_y_cor(i,J) = .false.
+          reset_v(i,J,1) = 2
         endif ; enddo ; enddo
       else
         ! There are still points where a correction is needed, so use the top interface for lack of a better idea?
@@ -1754,6 +1767,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
           inty_pa_nonlin(i,J) = inty_pa(i,J,1) - 0.5*(pa(i,j,1) + pa(i,j+1,1))
           dgeo_y(i,J) = GV%g_Earth * (e(i,j+1,1)-e(i,j,1))
           seek_y_cor(i,J) = .false.
+          reset_v(i,J,1) = 2
         endif ; enddo ; enddo
       endif
     endif
@@ -1962,6 +1976,10 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
   if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
   if (CS%id_e_tidal_eq>0) call post_data(CS%id_e_tidal_eq, e_tidal_eq, CS%diag)
   if (CS%id_e_tidal_sal>0) call post_data(CS%id_e_tidal_sal, e_tidal_sal, CS%diag)
+  if (CS%id_MassWt_u>0) call post_data(CS%id_MassWt_u, MassWt_u, CS%diag)
+  if (CS%id_MassWt_v>0) call post_data(CS%id_MassWt_v, MassWt_v, CS%diag)
+  if (CS%id_reset_u>0) call post_data(CS%id_reset_u, reset_u, CS%diag)
+  if (CS%id_reset_v>0) call post_data(CS%id_reset_v, reset_v, CS%diag)
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
   if (CS%calculate_SAL .and. ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
@@ -2239,7 +2257,11 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
         'The fractional mass weighting at u-point PGF calculations', 'nondim')
   CS%id_MassWt_v = register_diag_field('ocean_model', 'MassWt_v', diag%axesCvL, Time, &
         'The fractional mass weighting at v-point PGF calculations', 'nondim')
-
+  !CY diags
+  CS%id_reset_u = register_diag_field('ocean_model', 'reset_u', diag%axesCuL, Time, &
+        'Layer for which bottom is the reset integral position for u PGF', 'nondim')
+  CS%id_reset_v = register_diag_field('ocean_model', 'reset_v', diag%axesCvL, Time, &
+        'Layer for which bottom is the reset integral position for v PGF', 'nondim')
   CS%GFS_scale = 1.0
   if (GV%g_prime(1) /= GV%g_Earth) CS%GFS_scale = GV%g_prime(1) / GV%g_Earth
 
