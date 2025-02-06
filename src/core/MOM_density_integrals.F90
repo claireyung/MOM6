@@ -282,7 +282,7 @@ subroutine int_density_dz_generic_pcm(T, S, z_t, z_b, rho_ref, rho_0, G_e, HI, &
         hWght = max(hWght, z_b(i+1,j)-SSH(i,j), z_b(i,j)-SSH(i+1,j))
       ! If both sides are nonvanished, then set it back to zero.
       if (((z_t(i,j) - z_b(i,j)) > h_nonvanished) .and. ((z_t(i+1,j) - z_b(i+1,j)) > h_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (z_t(i,j) - z_b(i,j)) + dz_neglect
@@ -354,7 +354,7 @@ subroutine int_density_dz_generic_pcm(T, S, z_t, z_b, rho_ref, rho_0, G_e, HI, &
         hWght = max(hWght, z_b(i,j+1)-SSH(i,j), z_b(i,j)-SSH(i,j+1))
       ! If both sides are nonvanished, then set it back to zero.
       if (((z_t(i,j) - z_b(i,j)) > h_nonvanished) .and. ((z_t(i,j+1) - z_b(i,j+1)) > h_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (z_t(i,j) - z_b(i,j)) + dz_neglect
@@ -666,7 +666,7 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       hWght = max(hWght, hWghtTop)
       ! If both sides are nonvanished, then set it back to zero.
       if (((e(i,j,K) - e(i,j,K+1)) > h_nonvanished) .and. ((e(i+1,j,K) - e(i+1,j,K+1)) > h_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
@@ -777,7 +777,7 @@ subroutine int_density_dz_generic_plm(k, tv, T_t, T_b, S_t, S_b, e, rho_ref, &
       hWght = max(hWght, hWghtTop)
       ! If both sides are nonvanished, then set it back to zero.
       if (((e(i,j,K) - e(i,j,K+1)) > h_nonvanished) .and. ((e(i,j+1,K) - e(i,j+1,K+1)) > h_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
 
       if (hWght > 0.) then
@@ -1108,7 +1108,7 @@ subroutine int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
       hWght = max(hWght, hWghtTop)
       ! If both sides are nonvanished, then set it back to zero.
       if (((e(i,j,K) - e(i,j,K+1)) > h_nonvanished) .and. ((e(i+1,j,K) - e(i+1,j,K+1)) > h_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
@@ -1220,7 +1220,7 @@ subroutine int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
       hWght = max(hWght, hWghtTop)
       ! If both sides are nonvanished, then set it back to zero.
       if (((e(i,j,K) - e(i,j,K+1)) > h_nonvanished) .and. ((e(i,j+1,K) - e(i,j+1,K+1)) > h_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (e(i,j,K) - e(i,j,K+1)) + dz_subroundoff
@@ -1551,7 +1551,7 @@ subroutine int_spec_vol_dp_generic_pcm(T, S, p_t, p_b, alpha_ref, HI, EOS, US, d
         hWght = max(hWght, P_surf(i,j)-p_b(i+1,j), P_surf(i+1,j)-p_b(i,j))
       ! If both sides are nonvanished, then set it back to zero.
       if (((p_b(i,j) - p_t(i,j)) > p_nonvanished) .and. ((p_b(i+1,j) - p_t(i+1,j)) > p_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
 
       if (hWght > 0.) then
@@ -1616,7 +1616,7 @@ subroutine int_spec_vol_dp_generic_pcm(T, S, p_t, p_b, alpha_ref, HI, EOS, US, d
         hWght = max(hWght, P_surf(i,j)-p_b(i,j+1), P_surf(i,j+1)-p_b(i,j))
       ! If both sides are nonvanished, then set it back to zero.
       if (((p_b(i,j) - p_t(i,j)) > p_nonvanished) .and. ((p_b(i,j+1) - p_t(i,j+1)) > p_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (p_b(i,j) - p_t(i,j)) + dP_neglect
@@ -1836,7 +1836,7 @@ subroutine int_spec_vol_dp_generic_plm(T_t, T_b, S_t, S_b, p_t, p_b, alpha_ref, 
         hWght = max(hWght, P_surf(i,j)-p_b(i+1,j), P_surf(i+1,j)-p_b(i,j))
       ! If both sides are nonvanished, then set it back to zero.
       if (((p_b(i,j) - p_t(i,j)) > p_nonvanished) .and. ((p_b(i+1,j) - p_t(i+1,j)) > p_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (p_b(i,j) - p_t(i,j)) + dP_neglect
@@ -1906,7 +1906,7 @@ subroutine int_spec_vol_dp_generic_plm(T_t, T_b, S_t, S_b, p_t, p_b, alpha_ref, 
         hWght = max(hWght, P_surf(i,j)-p_b(i,j+1), P_surf(i,j+1)-p_b(i,j))
       ! If both sides are nonvanished, then set it back to zero.
       if (((p_b(i,j) - p_t(i,j)) > p_nonvanished) .and. ((p_b(i,j+1) - p_t(i,j+1)) > p_nonvanished)) then
-          hWght = massWeightNVonlyToggle * hWght
+        hWght = massWeightNVonlyToggle * hWght
       endif
       if (hWght > 0.) then
         hL = (p_b(i,j) - p_t(i,j)) + dP_neglect
