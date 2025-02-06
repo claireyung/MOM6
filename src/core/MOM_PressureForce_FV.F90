@@ -280,7 +280,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
   dp_neglect = GV%g_Earth*GV%H_to_RZ * GV%H_subroundoff
   alpha_ref = 1.0 / CS%Rho0
   I_gEarth = 1.0 / GV%g_Earth
-  p_nonvanished = GV%g_Earth*CS%Rho0*CS%h_nonvanished
+  p_nonvanished = GV%g_Earth*GV%H_to_RZ*CS%h_nonvanished
 
   if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
@@ -985,6 +985,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   real :: I_g_rho            ! The inverse of the density times the gravitational acceleration [Z T2 L-2 R-1 ~> m Pa-1]
   real :: rho_ref            ! The reference density [R ~> kg m-3].
   real :: dz_neglect         ! A minimal thickness [Z ~> m], like e.
+  real :: dz_nonvanished     ! A small thickness considered to be vanished for mass weighting [Z ~> m]
   real :: H_to_RL2_T2        ! A factor to convert from thickness units (H) to pressure
                              ! units [R L2 T-2 H-1 ~> Pa m-1 or Pa m2 kg-1].
   real :: T5(5)         ! Temperatures and salinities at five quadrature points [C ~> degC]
@@ -1025,6 +1026,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
 
   h_neglect = GV%H_subroundoff
   dz_neglect = GV%dZ_subroundoff
+  dz_nonvanished = GV%H_to_Z*CS%h_nonvanished
   I_Rho0 = 1.0 / GV%Rho0
   G_Rho0 = GV%g_Earth / GV%Rho0
   GxRho = GV%g_Earth * GV%Rho0
@@ -1180,21 +1182,21 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
                     intx_dpa(:,:,k), inty_dpa(:,:,k), &
                     MassWghtInterp=CS%MassWghtInterp, &
                     use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p, &
-                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
+                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
         elseif ( CS%Recon_Scheme == 2 ) then
           call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa(:,:,k), intz_dpa(:,:,k), &
                     intx_dpa(:,:,k), inty_dpa(:,:,k), &
                     MassWghtInterp=CS%MassWghtInterp, Z_0p=Z_0p, &
-                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
+                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
         endif
       else
         call int_density_dz(tv_tmp%T(:,:,k), tv_tmp%S(:,:,k), e(:,:,K), e(:,:,K+1), &
                   rho_ref, CS%Rho0, GV%g_Earth, G%HI, tv%eqn_of_state, US, dpa(:,:,k), &
                   intz_dpa(:,:,k), intx_dpa(:,:,k), inty_dpa(:,:,k), G%bathyT, e(:,:,1), dz_neglect, &
                   CS%MassWghtInterp, Z_0p=Z_0p, &
-                  MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
+                  MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
       endif
       if (GV%Z_to_H /= 1.0) then
         !$OMP parallel do default(shared)
