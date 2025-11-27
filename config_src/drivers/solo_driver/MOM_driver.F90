@@ -178,6 +178,7 @@ program MOM6
   type(ice_shelf_CS),        pointer :: ice_shelf_CSp => NULL()
   logical                            :: override_shelf_fluxes !< If true, and shelf dynamics are active,
                                         !! the data_override feature is enabled (only for MOSAIC grid types)
+  logical                            :: override_melt
   type(wave_parameters_cs),  pointer :: waves_CSp => NULL()
   type(diag_ctrl),           pointer :: &
     diag => NULL()            !< A pointer to the diagnostic regulatory structure
@@ -303,7 +304,8 @@ program MOM6
     call initialize_ice_shelf_fluxes(ice_shelf_CSp, grid, US, fluxes)
     call initialize_ice_shelf_forces(ice_shelf_CSp, grid, US, forces)
     call ice_shelf_query(ice_shelf_CSp, grid, data_override_shelf_fluxes=override_shelf_fluxes)
-    if (override_shelf_fluxes) call data_override_init(Ocean_Domain_in=grid%domain%mpp_domain)
+    call ice_shelf_query(ice_shelf_CSp, grid, data_override_melt=override_melt)
+    if ((override_shelf_fluxes) .or. (override_melt)) call data_override_init(Ocean_Domain_in=grid%domain%mpp_domain)
     call get_param(param_file, mod_name, "INITIALIZE_ICE_SHEET_SMB", &
                    initialize_smb, "Read in a constant SMB for the ice sheet", default=.false.)
     if (initialize_smb) call initialize_ice_SMB(fluxes%shelf_sfc_mass_flux, grid, US, param_file)
